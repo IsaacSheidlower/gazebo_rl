@@ -81,8 +81,8 @@ class ArmReacher3D(ArmReacher):
         elif action == 5: dx, dy = -had, had
         elif action == 6: dx, dy = -ad, 0
         elif action == 7: dx, dy = -had, -had
-        elif action == 8: dz = 0.075 # up
-        elif action == 9: dz = -0.075 # down    
+        elif action == 8: dz = 0.025 # up
+        elif action == 9: dz = -0.025 # down    
         elif action == 10: gripper = 1
         elif action == 11: gripper = -1 
         else: dx, dy, dz, gripper = 0, 0, 0, 0

@@ -303,10 +303,10 @@ class ArmReacher(gym.Env):
                         self.arm.stop_arm()
         # check if we have reached the goal
         obs = self.prev_obs = self._get_obs()
-        if self.SAFETY_MODE and action[2] <= 0: # give negative reward when in safety mode and not going up.
-            reward = -.01; done = False
-        else:
-            reward, done = self._get_reward(obs, action)
+        # if self.SAFETY_MODE and action[2] <= 0: # give negative reward when in safety mode and not going up.
+        #     reward = -.01; done = False
+        # else:
+        reward, done = self._get_reward(obs, action)
 
         if self.current_step >= self.max_steps:
             done = True
