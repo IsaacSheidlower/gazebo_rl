@@ -90,7 +90,7 @@ class ArmReacher(gym.Env):
         self.arm = armpy.initialize("gen3")
 
         if workspace_limits is None:
-            self.workspace_limits = [.55, .85, -.40, .40, .01, .55]
+            self.workspace_limits = [.2, .7, -.40, .40, .01, .55]
         else:
             self.workspace_limits = workspace_limits
 
