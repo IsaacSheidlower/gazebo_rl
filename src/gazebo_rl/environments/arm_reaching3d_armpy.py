@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import numpy as np
-import rospy 
+import rospy
+from std_msgs.msg import Bool
 import time
 from gen3_testing.gen3_movement_utils import Arm
 from gazebo_rl.msg import ObsMessage
@@ -44,6 +45,8 @@ class ArmReacher3D(ArmReacher):
             self.goal_pose = goal_pose
         self.goal_pose = np.array(self.goal_pose)
 
+        self.reward_received_pub = rospy.Publisher("/reset_signal", Bool, queue_size=1)
+
     def get_obs(self):
         # append the goal pose to the observation
         obs = super()._get_obs()
@@ -62,7 +65,9 @@ class ArmReacher3D(ArmReacher):
 
         # using the presence of red color as the goal state
         state_reward = observation["state"][-1]
-        return state_reward, state_reward == 1
+        if state_reward == 1: done = True; self.reward_received_pub.publish(Bool(True));
+        else: done = False
+        return state_reward, done
     
     def _get_reward(self, observation, action=None):
         return self.get_reward(observation)
@@ -73,18 +78,19 @@ class ArmReacher3D(ArmReacher):
         """
         action_distance = ad = 0.025; had = ad # NOTE: half action on diagonal
         gripper, dx, dy, dz = 0, 0, 0, 0
-        if action == 0: dx, dy = 0, -ad
-        elif action == 1: dx, dy = had, -had
-        elif action == 2: dx, dy = ad, 0
-        elif action == 3: dx, dy = had, had
-        elif action == 4: dx, dy = 0, ad
-        elif action == 5: dx, dy = -had, had
-        elif action == 6: dx, dy = -ad, 0
-        elif action == 7: dx, dy = -had, -had
-        elif action == 8: dz = 0.025 # up
-        elif action == 9: dz = -0.025 # down    
-        elif action == 10: gripper = 1
-        elif action == 11: gripper = -1 
+        if action == 0: pass # noop
+        elif action == 1: dx, dy = 0, -ad
+        elif action == 2: dx, dy = had, -had
+        elif action == 3: dx, dy = ad, 0
+        elif action == 4: dx, dy = had, had
+        elif action == 5: dx, dy = 0, ad
+        elif action == 6: dx, dy = -had, had
+        elif action == 7: dx, dy = -ad, 0
+        elif action == 8: dx, dy = -had, -had
+        elif action == 9: dz = 0.025 # up
+        elif action == 10: dz = -0.025 # down    
+        elif action == 11: gripper = 1
+        elif action == 12: gripper = -1 
         else: dx, dy, dz, gripper = 0, 0, 0, 0
         return np.array([dx, dy, dz, 0, 0, 0, gripper])
         

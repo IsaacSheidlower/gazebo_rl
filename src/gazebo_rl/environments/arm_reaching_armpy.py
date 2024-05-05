@@ -71,6 +71,7 @@ class ArmReacher(gym.Env):
         self.observation_topic = observation_topic
         self.img_obs = "_img_" in observation_topic
         print(f"{self.observation_topic} {input_size}")
+        self.input_size = input_size
         if self.img_obs:
             print(str(__class__), "Using image observations")
             self.observation_space = gym.spaces.Dict({
@@ -90,7 +91,7 @@ class ArmReacher(gym.Env):
         self.arm = armpy.initialize("gen3")
 
         if workspace_limits is None:
-            self.workspace_limits = [.2, .7, -.40, .40, .01, .55]
+            self.workspace_limits = [.25, .7, -.40, .40, .01, .55]
         else:
             self.workspace_limits = workspace_limits
 
@@ -128,7 +129,7 @@ class ArmReacher(gym.Env):
                 print("No image received. Sending out blank observation.", e)
                 # return self._get_obs(is_first=is_first) #oof ugly
                 return {
-                    "image": np.zeros((64, 64, 3), dtype=np.uint8),
+                    "image": np.zeros(self.input_size, dtype=np.uint8),
                     "is_first": is_first,
                     "is_last": False, # never ends
                     "is_terminal": False, # never ends
@@ -152,7 +153,7 @@ class ArmReacher(gym.Env):
                     # print(f"\timg {img_np.shape}")
                     # img_np = img_np[:, width//2 - height//2: width//2 + height//2]
             
-            resized_img = cv2.resize(img_np, (64, 64))
+            resized_img = cv2.resize(img_np, self.input_size[:2])
             # flip the image vertically
             resized_img = cv2.flip(resized_img, 0)
             # flip the image horizontally
@@ -172,12 +173,12 @@ class ArmReacher(gym.Env):
             return np.array(rospy.wait_for_message(self.observation_topic, ObsMessage).obs)
 
     def reset(self):
-        rospy.sleep(.5)
+        rospy.sleep(.1)
         self.arm.stop_arm()
         self.arm.clear_faults()
-        rospy.sleep(.5)
+        rospy.sleep(.25)
         self.arm.open_gripper()
-        rospy.sleep(1)
+        rospy.sleep(0.5)
         if self.reset_pose is None:
             self.arm.home_arm()
         else:
@@ -237,21 +238,21 @@ class ArmReacher(gym.Env):
                 action = np.clip(np.array(action), self.min_action, self.max_action)
                 action = [action[0], action[1], action[2], 0, 0, 0]
             # Do not allow an action to take us beyond the workspace limits
-            expected_new_position = self.prev_obs["state"][:3] + action[:3]
+            expected_new_position = newx, newy, newz = self.prev_obs["state"][:3] + action[:3]
             prev_state_str = f"{self.prev_obs['state'][0]:1.2f} {self.prev_obs['state'][1]:1.2f} {self.prev_obs['state'][2]:1.2f}"
-            pred_state_str = f"{expected_new_position[0]:1.2f} {expected_new_position[1]:1.2f} {expected_new_position[2]:1.2f}"
+            pred_state_str = f"{newx:1.2f} {newy:1.2f} {newz:1.2f}"
             print(f"Current position: {prev_state_str} -> {pred_state_str}", end=" ")
             print(f"from action {action[:3]}", end=" ")
-            if expected_new_position[0] < self.workspace_limits[0] or expected_new_position[0] > self.workspace_limits[1]:
-                action[0] = 0
-                # print("x out of bounds. stopping.")
-            if expected_new_position[1] < self.workspace_limits[2] or expected_new_position[1] > self.workspace_limits[3]:
-                # print("y out of bounds. stopping.")
-                action[1] = 0
-            if expected_new_position[2] < self.workspace_limits[4] or expected_new_position[2] > self.workspace_limits[5]:
-                # print("z out of bounds. stopping.")
-                action[2] = 0
 
+            # NOTE: UGLY HARDCODINGS FOR FLOWERBED TASK
+            if newx < self.workspace_limits[0] or newx > self.workspace_limits[1]: action[0] = 0 # print("x out of bounds. stopping.")
+            if newy < self.workspace_limits[2] or newy > self.workspace_limits[3]: action[1] = 0 # print("y out of bounds. stopping.")
+            
+            if newx < 0.5: # NOTE: Hardcoded horizontal position of flowerbed
+                if newz < self.workspace_limits[4] or newz > self.workspace_limits[5]: action[2] = 0 # print("z out of bounds. stopping.") 
+            else: # NOTE: protect the flow bed by introducing a higher z limit
+                if newz < 0.2: action[2] = max(0, action[2]) 
+                elif newz > self.workspace_limits[5]: action[2] = 0
 
             ### SAFETY CHECK
             if self.SAFETY_MODE:
