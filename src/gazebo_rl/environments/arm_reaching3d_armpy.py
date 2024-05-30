@@ -8,7 +8,7 @@ from gen3_testing.gen3_movement_utils import Arm
 from gazebo_rl.msg import ObsMessage
 from kortex_driver.srv import *
 from kortex_driver.msg import *
-from gazebo_rl.environments.arm_reaching_armpy import ArmReacher
+from gazebo_rl.environments.arm_reaching_armpy import ArmReacher, x_flower_thresh, z_flower_thresh
 import gymnasium as gym
 
 
@@ -17,12 +17,11 @@ import gymnasium as gym
 #     1: [0, 0, 0, 0, 0, 0, 1],
 #     2: [0, 0, 0, 0, 0, 0, -1],
 
-
 class ArmReacher3D(ArmReacher):
     # inherits from ArmReacher
     def __init__(self, max_action=.1, min_action=-.1, n_actions=3, action_duration=.2, reset_pose=None, episode_time=60, 
         stack_size=4, sparse_rewards=False, success_threshold=.08, wrist_rotate_limit=.3,home_arm=True, with_pixels=False, max_vel=.3,
-        cartesian_control=True, relative_commands=True, sim=True, workspace_limits=None, observation_topic="rl_observation",
+        velocity_control=False, cartesian_control=True, relative_commands=True, sim=True, workspace_limits=None, observation_topic="rl_observation",
         goal_dimensions=3, goal_pose=None, action_movement_threshold=.01,input_size=5, discrete_actions=False):
         
         if discrete_actions:
@@ -46,12 +45,26 @@ class ArmReacher3D(ArmReacher):
         self.goal_pose = np.array(self.goal_pose)
 
         self.reward_received_pub = rospy.Publisher("/reset_signal", Bool, queue_size=1)
+        self.velocity_control = velocity_control
+
+        self.executed_episodes = 0
 
     def get_obs(self):
         # append the goal pose to the observation
         obs = super()._get_obs()
-        return obs  
+        return obs
     
+    def reset(self):
+        self.executed_episodes += 1
+
+        if self.executed_episodes % rospy.get_param('/episode_interval', 5) == 0:
+            print(f"PAUSING FOR ENVIRONMENT CLEANUP")
+            rospy.set_param("/pause", True)
+        return super().reset()
+    
+    def step(self, action):
+        return super().step(action, velocity_control=self.velocity_control)
+
     def get_reward(self, observation):
         # NOTE: temporary, arbitrary, goal state
         # goal_state = np.array([0.6, -0.2]) # sim arm, upper right corner 2D
@@ -64,10 +77,17 @@ class ArmReacher3D(ArmReacher):
         #     return 0, False
 
         # using the presence of red color as the goal state
-        state_reward = observation["state"][-1]
-        if state_reward == 1: done = True; self.reward_received_pub.publish(Bool(True));
-        else: done = False
-        return state_reward, done
+        state = observation["state"]
+        reward = state[-1]
+
+        # NOTE: since we keep getting false alarms, we're going to gate reward on a z value. A cup cannot possibly be in the basket if the tool z is not above the basket.
+        flower_thresh = (state[0] > x_flower_thresh) and (state[2] > z_flower_thresh)
+
+        if reward == 1 and flower_thresh: 
+            done = True; self.reward_received_pub.publish(Bool(True));
+        else: 
+            done = False
+        return reward, done
     
     def _get_reward(self, observation, action=None):
         return self.get_reward(observation)
@@ -76,7 +96,15 @@ class ArmReacher3D(ArmReacher):
         """
             Maps the discrete actions to continuous actions
         """
-        action_distance = ad = 0.025; had = ad # NOTE: half action on diagonal
+        
+        if self.velocity_control:
+            action_distance = ad = 0.25; had = ad # NOTE: half action on diagonal
+            zad = 0.04
+        else:
+            action_distance = ad = 0.025; had = ad
+            zad = 0.025
+
+
         gripper, dx, dy, dz = 0, 0, 0, 0
         if action == 0: pass # noop
         elif action == 1: dx, dy = 0, -ad
@@ -87,8 +115,8 @@ class ArmReacher3D(ArmReacher):
         elif action == 6: dx, dy = -had, had
         elif action == 7: dx, dy = -ad, 0
         elif action == 8: dx, dy = -had, -had
-        elif action == 9: dz = 0.025 # up
-        elif action == 10: dz = -0.025 # down    
+        elif action == 9: dz = zad # up
+        elif action == 10: dz = -zad # down    
         elif action == 11: gripper = 1
         elif action == 12: gripper = -1 
         else: dx, dy, dz, gripper = 0, 0, 0, 0
