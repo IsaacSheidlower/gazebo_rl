@@ -20,7 +20,8 @@ range = lambda x: x[1] - x[0]
 ybounds = -0.2, 0.2; yzero = zero(ybounds); yrange = range(ybounds)
 xbounds = 0.25, 0.7; xzero = zero(xbounds); xrange = range(xbounds)
 zbounds = 0.09, 0.48; zzero = zero(zbounds); zrange = range(zbounds)
-z_flower_thresh = 0.37 # for flowerpot
+z_flower_thresh = 0.365 # for flowerpot
+y_flower_thresh = -0.04 # for flowerpot
 x_flower_thresh = 0.52 # for flowerpot
 
 class ArmReacher(gym.Env):
@@ -97,7 +98,9 @@ class ArmReacher(gym.Env):
 
         self.goal_dimensions = goal_dimensions
         self.max_steps = max_steps
+        print("Initializing arm")
         self.arm = armpy.initialize("gen3")
+        print("Initialized arm")
         
         self.current_step = 0
 
@@ -133,75 +136,12 @@ class ArmReacher(gym.Env):
                 self.SAFETY_MODE = False
 
     def _get_obs(self, is_first=False):
-        if self.img_obs:
-            try:
-                img_msg = rospy.wait_for_message(self.observation_topic, Image, timeout=5)
-                state_msg = rospy.wait_for_message("rl_observation", ObsMessage, timeout=5)
-            except Exception as e:
-                print("No image received. Sending out blank observation.", e)
-                # return self._get_obs(is_first=is_first) #oof ugly
-                return {
-                    "image": np.zeros(self.input_size, dtype=np.uint8),
-                    "is_first": is_first,
-                    "is_last": False, # never ends
-                    "is_terminal": False, # never ends
-                    "state": np.array([0, 0, 0, 0, 0]), # x, y, z, gripper_state, reward
-                    "rel_eef": np.array([0, 0, 0, 0])  # normalized x, y, z, unnormalized gripper_state
-                }
-            
-            img_np = np.frombuffer(img_msg.data, dtype=np.uint8).reshape(img_msg.height, img_msg.width, -1)
-            
-            # reshape to the config size
-            # NOTE: this is duplicated inthe observation node. Must unify.
-            width, height = img_np.shape[1], img_np.shape[0]
-            if width != height: # non square
-                if width < height:
-                    raise ValueError("Image is taller than it is wide. This is not supported.")
-                else: # images are wider than tall
-                    # crop the square image from the center, with an additional offset
-                    # offset = rospy.get_param("/image_offset", 0)
-                    offset = 50
-                    bounds = (width//2 - offset) -  height//2, (width//2 - offset) + height//2
-                    # print(f"img {img_np.shape}", bounds[0], bounds[1])
-                    img_np = img_np[:, bounds[0]:bounds[1]]
-                    # print(f"\timg {img_np.shape}")
-                    # img_np = img_np[:, width//2 - height//2: width//2 + height//2]
-            
-            resized_img = cv2.resize(img_np, self.input_size[:2])
-            # flip the image vertically
-            resized_img = cv2.flip(resized_img, 0)
-            # flip the image horizontally
-            resized_img = cv2.flip(resized_img, 1)
-
-            if GRAYSCALE:=True:
-                resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2GRAY)
-                resized_img = np.expand_dims(resized_img, axis=-1)
-        
-            cv2.imshow("image", resized_img)
-            cv2.waitKey(1)
-
-
-            # normalize the post based on the bounds. 0 mean
-            x_pose, y_pose, z_pose, gripper_state = state_msg.obs[:4]
-            x_pose = (x_pose - xzero) / xrange
-            y_pose = (y_pose - yzero) / yrange
-            z_pose = (z_pose - zzero) / zrange
-
-            self.gripper_state = gripper_state
-
-            return {
-                "image": resized_img,
-                "is_first": is_first,
-                "is_last": False, # never ends
-                "is_terminal": False, # never ends
-                "state": np.array(state_msg.obs),
-                "rel_eef": np.array((x_pose, y_pose, z_pose, gripper_state))
-            }
-        else:
-            return np.array(rospy.wait_for_message(self.observation_topic, ObsMessage).obs)
+        '''
+        Get the observation from the robot
+        '''
+        raise NotImplementedError
 
     def reset(self):
-
         self.current_step = 0
         if not self.sim:
             self.arm.stop_arm()
@@ -219,6 +159,9 @@ class ArmReacher(gym.Env):
             if self.sim:
                 self.arm.goto_joint_pose_sim(self.reset_pose)
             else:
+                # first go up to avoid collisions
+                self.arm.goto_cartesian_pose_old([-0.1, -0.15, 0.05, 0, 0, 0], relative=True, radians=True)
+                rospy.sleep(0.5)
                 self.arm.goto_joint_pose(self.reset_pose)
             rospy.sleep(1)
         self.prev_obs = self._get_obs(is_first=True)
@@ -260,17 +203,16 @@ class ArmReacher(gym.Env):
                 pass
             else:
                 if velocity_control: # send a 0 vel to prevent the arm from moving while grippering
-                    self.arm.cartesian_velocity_command([0, 0, 0, 0, 0, 0], duration=0.01, radians=True)
-                
+                    self.arm.stop_arm()
 
-                gripper_open = True if (self.gripper_state and self.gripper_state < 0.5) else False
+                gripper_open = True if (self.gripper_state and self.gripper_state < 50) else False # NOTE: the initial motor position of the gripper seems to be variable based on unknown factors.
 
-                if action[6] == 1:
+                if action[6] == 1 and not gripper_open:
                     self.arm.open_gripper()
                 elif action[6] == -1 and gripper_open: # prevent gripper faults
                     self.arm.close_gripper()
                 rospy.sleep(0.15)
-                print(f"gripper action {action[6]} with state {self.gripper_state:1.2f}")
+                print(f"{self.current_step:4d} gripper action {action[6]} with state {self.gripper_state:1.2f}")
         else:
             if clip_wrist_action:
                 action = np.clip(np.array(action), self.min_action, self.max_action)
@@ -287,18 +229,18 @@ class ArmReacher(gym.Env):
 
             prev_state_str = f"{self.prev_obs['state'][0]:+1.2f} {self.prev_obs['state'][1]:+1.2f} {self.prev_obs['state'][2]:+1.2f}"
             pred_state_str = f"{newx:+1.2f} {newy:+1.2f} {newz:+1.2f}"
-            print(f"dp: {prev_state_str} -> {pred_state_str}", end=" ")
+            print(f"{self.current_step:4d} dp: {prev_state_str} -> {pred_state_str}", end=" ")
             print(f"from action {action[:3]}")
 
             # NOTE: UGLY HARDCODINGS FOR FLOWERBED TASK
             if (newx < self.workspace_limits[0] and action[0] < 0) or (newx > self.workspace_limits[1] and action[0] > 0): action[0] = 0 # print("x out of bounds. stopping.")
             if (newy < self.workspace_limits[2] and action[1] < 0) or (newy > self.workspace_limits[3] and action[1] > 0): action[1] = 0 # print("y out of bounds. stopping.")
             
-            if newx < x_flower_thresh: # NOTE: Hardcoded horizontal position of flowerbed
+            if newy < y_flower_thresh: # NOTE: Hardcoded horizontal position of flowerbed. Normal Z workspace limits apply.
                 if (newz < self.workspace_limits[4] and action[2] < 0) or (newz > self.workspace_limits[5] and action[2] > 0): action[2] = 0 # print("z out of bounds. stopping.") 
             else: # NOTE: protect the flow bed by introducing a higher z limit
                 if newz < z_flower_thresh: 
-                    action[0] = min(0, action[0]) # don't let us push into the flowerbed
+                    action[1] = min(0, action[1]) # don't let us push into the flowerbed
                     action[2] = max(0, action[2]) # don't let us push into the flowerbed
                 elif newz > self.workspace_limits[5]: action[2] = min(0, action[2]) # don't let us go too high
 
