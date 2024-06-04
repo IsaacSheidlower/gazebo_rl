@@ -18,78 +18,13 @@ from pathlib import Path
 import collections, datetime, itertools
 from std_msgs.msg import Int32MultiArray, Float32MultiArray, Bool
 
-class Camera:
-    # Make width and height static parameters
-    width = 480
-    height = 270
-    def __init__(self, width=None, height=None, savepath=None):
-        self.bridge = CvBridge()
-        self.image = None
-        self.width = Camera.width if width is None else width
-        self.height = Camera.height if height is None else height
-        self.frame_num = 0
-
-        if savepath is not None:
-            savepath = Path(savepath).expanduser()
-            if savepath.parent.exists():
-                import shutil
-                # delete the old files
-                print(f"Deleting old files in {savepath.parent}")
-                shutil.rmtree(savepath.parent)
-            print(f"Creating directory {savepath}")
-            savepath.mkdir(parents=True)
-        self.savepath = savepath
-
-    def start(self, dev_id=0):
-        self.c = cv2.VideoCapture(dev_id)
-        self.c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-
-        if not self.c.isOpened():
-            print("Error: Could not open camera.")
-            return False
-        else:
-            self.c.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self.c.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            rospy.loginfo(f"Camera initialized with res {str(self.width)} x : {str(self.height)}")
-            return True
-        
-    def read(self, get_msg=True, show=False):
-        ret, frame = self.c.read()
-
-        if show:
-            cv2.imshow("frame", frame)
-            key = cv2.waitKey(10)
-            if key == 27:
-                cv2.destroyAllWindows()
-                self.c.release()
-                print("Camera released")
-                exit(0)
-
-
-        if self.savepath is not None:
-            # check if the savepath exists
-            cv2.imwrite(str(self.savepath / f"{self.frame_num:04d}.png"), frame)
-
-        self.frame_num += 1
-        if get_msg:
-            # return ret, self.bridge.cv2_to_imgmsg(frame, encoding="passthrough")
-            return ret, self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
-        else:
-            return ret, frame
-        
-    def close(self):
-        self.c.release()
-        cv2.destroyAllWindows()
-        print("Camera released")
-        
-
 #TODO ActionMap = {
 #     0: [0, 0, 0, 0, 0, 0, 0],
 #     1: [0, 0, 0, 0, 0, 0, 1],
 #     2: [0, 0, 0, 0, 0, 0, -1],
 import threading
 current_observation = np.zeros(5)    
-lock = threading.Lock()
+eef_lock = threading.Lock()
 def eef_pose(data):
     # NOTE: ioda has many commented lines that should be referenced when adding state
     # TODO: this should just be a pose message.
@@ -98,26 +33,69 @@ def eef_pose(data):
     y_pose = data.base.tool_pose_y 
     z_pose = data.base.tool_pose_z
 
-    # normalize the post based on the bounds. 0 mean
-    # x_pose = (x_pose - xzero) / xrange
-    # y_pose = (y_pose - yzero) / yrange
-    # z_pose = (z_pose - zzero) / zrange
+    with eef_lock:
+        current_observation[0] = x_pose
+        current_observation[1] = y_pose
+        current_observation[2] = z_pose
+        try:
+            current_observation[3] = data.interconnect.oneof_tool_feedback.gripper_feedback[0].motor[0].position
+        except:
+            current_observation[3] = 0.0
+            print("ERROR: No gripper feedback received.")
+        current_observation[4] = 0.0 # REWARD
 
-    # y_twist = np.deg2rad(data.base.tool_pose_theta_y)
-    current_observation[0] = x_pose
-    current_observation[1] = y_pose
-    current_observation[2] = z_pose
-    try:
-        current_observation[3] = data.interconnect.oneof_tool_feedback.gripper_feedback[0].motor[0].position
-    except:
-        current_observation[3] = 0.0
-        print("ERROR: No gripper feedback received.")
+image_lock = threading.Lock()
+current_image = np.zeros((480, 640, 3), dtype=np.uint8)
+image_processed = False
+def img_cb(data):
+    with image_lock:
+        global current_image, image_processed
+        current_image = CvBridge().imgmsg_to_cv2(data, "bgr8")
+        image_processed = False
 
-    current_observation[4] = 0.0 # REWARD
+weights_lock = threading.Lock()
+current_weights = np.zeros(5)
+def weights_cb(data):
+    with weights_lock:
+        global current_weights
+        current_weights = data.data
 
-def sync_copy():
-    with lock:
+def sync_copy_eef():
+    with eef_lock:
         return current_observation.copy()
+    
+def sync_copy_image(input_size):
+    global current_image, image_processed
+    with image_lock:
+        img_np = current_image.copy()
+        if not image_processed:
+            image_processed = True
+            width, height = img_np.shape[1], img_np.shape[0]
+            if width != height: # non square
+                if width < height:
+                    raise ValueError("Image is taller than it is wide. This is not supported.")
+                else: # images are wider than tall
+                    # crop the square image from the center, with an additional offset
+                    # offset = rospy.get_param("/image_offset", 0)
+                    offset = 50
+                    bounds = (width//2 - offset) -  height//2, (width//2 - offset) + height//2
+                    img_np = img_np[:, bounds[0]:bounds[1]]
+            
+            resized_img = cv2.resize(img_np, input_size[:2])
+            # flip the image horizontally
+            resized_img = cv2.flip(resized_img, 1)
+
+            if GRAYSCALE:=True:
+                resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2GRAY)
+                resized_img = np.expand_dims(resized_img, axis=-1)
+            img_np = resized_img
+            current_image = img_np
+
+    return img_np
+    
+def sync_copy_weights():
+    with weights_lock:
+        return list(current_weights)
     
 class ArmReacher3D(ArmReacher):
     # inherits from ArmReacher
@@ -149,14 +127,14 @@ class ArmReacher3D(ArmReacher):
         self.reward_received_pub = rospy.Publisher("/reset_signal", Bool, queue_size=1)
         self.velocity_control = velocity_control
 
-        # bring observation node directly into the environment to keep us as close to live operation as possible.
-        self.executed_episodes = 0
-        self.camera = Camera(savepath=None) # A simulated self.camera should get an image published from gazebo.
-        self.camera.start(); print(f"Camera started.")
         rospy.Subscriber("/my_gen3/base_feedback", BaseCyclic_Feedback, callback=eef_pose)
+        rospy.Subscriber("/rl_img_observation", Image, callback=img_cb)
+        rospy.Subscriber("/weights", Float32MultiArray, callback=weights_cb)
 
         self.tracked_weights = []; self.alpha = 0.1; self.TARGET_IDXS = [1,2,3] # which scales
         self.WAITING_FOR_RESET = 0; self.WFR = 15
+        self.executed_episodes = 0
+        self.debug = rospy.get_param("/debug", False)
 
     def check_for_reward(self):
         give_reward = False
@@ -166,11 +144,9 @@ class ArmReacher3D(ArmReacher):
             print(f"\t\t{self.WAITING_FOR_RESET} {datetime.datetime.now().strftime('%H:%M:%S')}")
             give_reward = True
         else:
-            # weights = rospy.wait_for_message("/tracked_weights", Int32MultiArray, timeout=2)
-                
-            weights = rospy.wait_for_message("/weights", Float32MultiArray, timeout=2)
-            if not self.tracked_weights: self.tracked_weights = [collections.deque(maxlen=25) for w in weights.data]
-            for idx, w in enumerate(weights.data):
+            weights = sync_copy_weights()
+            if not self.tracked_weights: self.tracked_weights = [collections.deque(maxlen=25) for w in weights]
+            for idx, w in enumerate(weights):
                 self.tracked_weights[idx].append(w)
 
             if len(self.tracked_weights[0]) >= 25:
@@ -202,10 +178,8 @@ class ArmReacher3D(ArmReacher):
     def _get_obs(self, is_first=False):
         if self.img_obs:
             try:
-                # img_msg = rospy.wait_for_message(self.observation_topic, Image, timeout=5)
-                # state_msg = rospy.wait_for_message("rl_observation", ObsMessage, timeout=5)
-                ret, img_np = self.camera.read(show=True, get_msg=False)
-                state = sync_copy()
+                img_np = sync_copy_image(self.input_size[:2])
+                state = sync_copy_eef()
             except Exception as e:
                 print("No image received. Sending out blank observation.", e)
                 # return self._get_obs(is_first=is_first) #oof ugly
@@ -222,26 +196,9 @@ class ArmReacher3D(ArmReacher):
             
             # reshape to the config size
             # NOTE: this is duplicated inthe observation node. Must unify.
-            width, height = img_np.shape[1], img_np.shape[0]
-            if width != height: # non square
-                if width < height:
-                    raise ValueError("Image is taller than it is wide. This is not supported.")
-                else: # images are wider than tall
-                    # crop the square image from the center, with an additional offset
-                    # offset = rospy.get_param("/image_offset", 0)
-                    offset = 50
-                    bounds = (width//2 - offset) -  height//2, (width//2 - offset) + height//2
-                    img_np = img_np[:, bounds[0]:bounds[1]]
-            
-            resized_img = cv2.resize(img_np, self.input_size[:2])
-            # flip the image horizontally
-            resized_img = cv2.flip(resized_img, 1)
-
-            if GRAYSCALE:=True:
-                resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2GRAY)
-                resized_img = np.expand_dims(resized_img, axis=-1)
+            resized_img = img_np
         
-            cv2.imshow("image", resized_img)
+            cv2.imshow("env_image", resized_img)
             cv2.waitKey(1)
 
             # normalize the post based on the bounds. 0 mean
@@ -250,9 +207,11 @@ class ArmReacher3D(ArmReacher):
             x_pose = (x_pose - xzero) / xrange
             y_pose = (y_pose - yzero) / yrange
             z_pose = (z_pose - zzero) / zrange
-            gripper_state = gripper_state / 50 - 1
+            gripper_state = gripper_state / 50 - 1 # normalize to range [-1, 1]
 
             self.gripper_state = gripper_state
+
+            if self.debug: print(f"State: {[f'{s:.2f}' for s in state]}")
 
             return {
                 "image": resized_img,
