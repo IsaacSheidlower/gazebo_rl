@@ -25,7 +25,9 @@ from std_msgs.msg import Int32MultiArray, Float32MultiArray, Bool
 import threading
 current_observation = np.zeros(5)    
 eef_lock = threading.Lock()
+eef_time = time.time()
 def eef_pose(data):
+    global current_observation, eef_time
     # NOTE: ioda has many commented lines that should be referenced when adding state
     # TODO: this should just be a pose message.
     # augmented with velocity:
@@ -43,54 +45,64 @@ def eef_pose(data):
             current_observation[3] = 0.0
             print("ERROR: No gripper feedback received.")
         current_observation[4] = 0.0 # REWARD
+        
+        dt = time.time() - eef_time
+        if dt > 5: print(f"WARN: EEF time: {dt} seconds.")
+        eef_time = time.time()
 
 image_lock = threading.Lock()
-current_image = np.zeros((480, 640, 3), dtype=np.uint8)
-image_processed = False
+current_image = np.zeros((128, 128, 1), dtype=np.uint8)
+image_time = time.time()
 def img_cb(data):
     with image_lock:
-        global current_image, image_processed
-        current_image = CvBridge().imgmsg_to_cv2(data, "bgr8")
-        image_processed = False
+        global current_image, image_time
+        current_image = CvBridge().imgmsg_to_cv2(data, "8UC1")
+        # add the grayscale channel
+        current_image = np.expand_dims(current_image, axis=-1)
+        dt = time.time() - image_time
+        if dt > 5: print(f"WARN: image time: {dt} seconds.")
+        image_time = time.time()
+
+side_image_lock = threading.Lock()
+current_side_image = np.zeros((64, 64), dtype=np.uint8)
+side_image_time = time.time()
+def side_img_cb(data):
+    with side_image_lock:
+        global current_side_image, side_image_time
+        current_side_image = CvBridge().imgmsg_to_cv2(data, "8UC1")
+        # add the grayscale channel
+        current_side_image = np.expand_dims(current_side_image, axis=-1)
+        dt = time.time() - side_image_time
+        if dt > 5: print(f"WARN: side image time: {dt} seconds.")
+        side_image_time = time.time()
+
 
 weights_lock = threading.Lock()
 current_weights = np.zeros(5)
+weights_time = time.time()
 def weights_cb(data):
     with weights_lock:
-        global current_weights
+        global current_weights, weights_time
         current_weights = data.data
+        dt = time.time() - weights_time
+        if dt > 5: print(f"WARN: weights time: {dt} seconds.")
+        weights_time = time.time()
+
 
 def sync_copy_eef():
     with eef_lock:
         return current_observation.copy()
     
-def sync_copy_image(input_size):
-    global current_image, image_processed
+def sync_copy_image():
+    global current_image
     with image_lock:
         img_np = current_image.copy()
-        if not image_processed:
-            image_processed = True
-            width, height = img_np.shape[1], img_np.shape[0]
-            if width != height: # non square
-                if width < height:
-                    raise ValueError("Image is taller than it is wide. This is not supported.")
-                else: # images are wider than tall
-                    # crop the square image from the center, with an additional offset
-                    # offset = rospy.get_param("/image_offset", 0)
-                    offset = 50
-                    bounds = (width//2 - offset) -  height//2, (width//2 - offset) + height//2
-                    img_np = img_np[:, bounds[0]:bounds[1]]
-            
-            resized_img = cv2.resize(img_np, input_size[:2])
-            # flip the image horizontally
-            resized_img = cv2.flip(resized_img, 1)
+    return img_np
 
-            if GRAYSCALE:=True:
-                resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2GRAY)
-                resized_img = np.expand_dims(resized_img, axis=-1)
-            img_np = resized_img
-            current_image = img_np
-
+def sync_copy_side_image():
+    global current_side_image
+    with side_image_lock:
+        img_np = current_side_image.copy()
     return img_np
     
 def sync_copy_weights():
@@ -129,6 +141,7 @@ class ArmReacher3D(ArmReacher):
 
         rospy.Subscriber("/my_gen3/base_feedback", BaseCyclic_Feedback, callback=eef_pose)
         rospy.Subscriber("/rl_img_observation", Image, callback=img_cb)
+        # rospy.Subscriber("/rl_side_img_observation", Image, callback=side_img_cb)
         rospy.Subscriber("/weights", Float32MultiArray, callback=weights_cb)
 
         self.tracked_weights = []; self.alpha = 0.1; self.TARGET_IDXS = [1,2,3] # which scales
@@ -178,13 +191,15 @@ class ArmReacher3D(ArmReacher):
     def _get_obs(self, is_first=False):
         if self.img_obs:
             try:
-                img_np = sync_copy_image(self.input_size[:2])
+                img_np = sync_copy_image()
+                # side_img = sync_copy_side_image()
                 state = sync_copy_eef()
             except Exception as e:
                 print("No image received. Sending out blank observation.", e)
                 # return self._get_obs(is_first=is_first) #oof ugly
                 return {
                     "image": np.zeros(self.input_size, dtype=np.uint8),
+                    # "side_img": np.zeroes((64, 64, 1), dtype=np.uint8), # placeholder (should be 64x64)
                     "is_first": is_first,
                     "is_last": False, # never ends
                     "is_terminal": False, # never ends
@@ -215,6 +230,7 @@ class ArmReacher3D(ArmReacher):
 
             return {
                 "image": resized_img,
+                # "side_image": side_img,
                 "is_first": is_first,
                 "is_last": False, # never ends
                 "is_terminal": False, # never ends
@@ -237,7 +253,6 @@ class ArmReacher3D(ArmReacher):
         return super().step(action, velocity_control=self.velocity_control)
 
     def get_reward(self, observation):
-
         # using the presence of red color as the goal state
         done = False
         state = observation["state"]

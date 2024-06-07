@@ -11,15 +11,14 @@ from kortex_driver.msg import *
 import gymnasium as gym
 from gymnasium.spaces import Box
 from gym import spaces
-from sensor_msgs.msg import Image
 from collections import defaultdict, deque
 import cv2
 
 zero = lambda x: (x[0] + x[1]) / 2
-range = lambda x: x[1] - x[0]
-ybounds = -0.2, 0.2; yzero = zero(ybounds); yrange = range(ybounds)
-xbounds = 0.25, 0.7; xzero = zero(xbounds); xrange = range(xbounds)
-zbounds = 0.09, 0.48; zzero = zero(zbounds); zrange = range(zbounds)
+nrange = lambda x: x[1] - x[0]
+ybounds = -0.2, 0.2; yzero = zero(ybounds); yrange = nrange(ybounds)
+xbounds = 0.25, 0.7; xzero = zero(xbounds); xrange = nrange(xbounds)
+zbounds = 0.09, 0.48; zzero = zero(zbounds); zrange = nrange(zbounds)
 z_flower_thresh = 0.365 # for flowerpot
 y_flower_thresh = -0.04 # for flowerpot
 x_flower_thresh = 0.52 # for flowerpot
@@ -85,6 +84,7 @@ class ArmReacher(gym.Env):
             print(str(__class__), "Using image observations")
             self.observation_space = gym.spaces.Dict({
                 'image': gym.spaces.Box(low=0, high=255, shape=input_size, dtype=np.uint8),
+                # 'side_image': gym.spaces.Box(low=0, high=255, shape=(64, 64, 1), dtype=np.uint8), 
                 'reward': gym.spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'is_first': gym.spaces.Box(low=0, high=1, shape=(), dtype=bool),
                 'is_last': gym.spaces.Box(low=0, high=1, shape=(), dtype=bool),
@@ -140,6 +140,17 @@ class ArmReacher(gym.Env):
         Get the observation from the robot
         '''
         raise NotImplementedError
+    
+    def stop_motion(self):
+        print("Stopping motion")
+        self.arm.stop_arm()
+        rospy.sleep(0.25)
+        self.arm.cartesian_velocity_command([0 for _ in range(7)], duration=self.action_duration, radians=True)
+        rospy.sleep(0.25)
+        self.arm.stop_arm()
+        rospy.sleep(0.25)
+        self.arm.cartesian_velocity_command([0 for _ in range(7)], duration=self.action_duration, radians=True)
+        print("\tHopefully stopped motion")
 
     def reset(self):
         self.current_step = 0
@@ -205,7 +216,7 @@ class ArmReacher(gym.Env):
                 if velocity_control: # send a 0 vel to prevent the arm from moving while grippering
                     self.arm.stop_arm()
 
-                gripper_open = True if (self.gripper_state and self.gripper_state < 50) else False # NOTE: the initial motor position of the gripper seems to be variable based on unknown factors.
+                gripper_open = True if (self.gripper_state and self.gripper_state < 0.5) else False # NOTE: the initial motor position of the gripper seems to be variable based on unknown factors.
 
                 if action[6] == 1 and not gripper_open:
                     self.arm.open_gripper()
@@ -299,15 +310,21 @@ class ArmReacher(gym.Env):
         # if self.SAFETY_MODE and action[2] <= 0: # give negative reward when in safety mode and not going up.
         #     reward = -.01; done = False
         # else:
+        info = {}
         reward, done = self._get_reward(obs, action)
-
         if self.current_step >= self.max_steps:
             done = True
+            info['is_terminal'] = True
             self.current_step = 0
 
+        obs['is_last'] = done
         if reward:
             print(f"Reward: {reward} Done: {done}. obs {obs['state']}")
-        return obs, reward, done, {}
+        if done:
+            print("Episode done. Stopping motion.")
+            self.stop_motion()
+        
+        return obs, reward, done, info
     
     def render(self):
         pass
