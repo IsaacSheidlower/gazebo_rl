@@ -26,7 +26,7 @@ import threading
 
 class BasicArm():
     def __init__(self, max_action=.1, min_action=-.1, n_actions=2, input_size=4, action_duration=.5, reset_pose=None, velocity_control=False,
-        stack_size=4, home_arm=True, max_vel=.3, cartesian_control=True, relative_commands=True, sim=True, workspace_limits=None, discrete_actions=False):
+        stack_size=4, home_arm=True, max_vel=.3, cartesian_control=True, relative_commands=True, sim=True, workspace_limits=None, discrete_actions=False, robot_name='gen3'):
         
         """
             Generic point reaching class for the Gen3 robot.
@@ -57,7 +57,7 @@ class BasicArm():
         self.velocity_control = velocity_control
 
         print("Initializing arm", end='...')
-        self.arm = armpy.initialize("gen3")
+        self.arm = armpy.initialize(robot_name)
         print("Initialized arm")
         
         if workspace_limits is None:
@@ -65,7 +65,7 @@ class BasicArm():
         else:
             self.workspace_limits = workspace_limits
 
-        rospy.Subscriber("/my_gen3/base_feedback", BaseCyclic_Feedback, self._base_feedback_callback)
+        rospy.Subscriber(f"/my_{robot_name}/base_feedback", BaseCyclic_Feedback, self._base_feedback_callback)
         self.SAFETY_MODE = False
         self.safety_histories = {
             "x_tool_torque": deque(maxlen=10),
@@ -78,6 +78,9 @@ class BasicArm():
         self.prev_eef = None; self._eef = None
         self._eef_lock = threading.Lock()
         self._eef_time = time.time()
+        self.LITE = 'lite' in robot_name
+        if self.LITE: print(f"Using gen3_lite")
+        else: print(f"Using gen3")
 
     def _base_feedback_callback(self, msg: BaseCyclic_Feedback):
         '''
@@ -86,13 +89,14 @@ class BasicArm():
         '''
         self.safety_histories['x_tool_torque'].append(msg.base.tool_external_wrench_torque_x)
         self.safety_histories['joint_1_torque'].append(msg.actuators[1].torque)
-        if len(self.safety_histories['x_tool_torque']) == 10:
-            xtool_mean = np.mean(self.safety_histories['x_tool_torque']); joint1_mean = np.mean(self.safety_histories['joint_1_torque'])
-            if (xtool_mean > self.x_tool_thresh) or (joint1_mean <= self.joint_1_thresh):
-                self.SAFETY_MODE = True
-                print(f"SAFETY MODE ENGAGED: {np.mean(self.safety_histories['x_tool_torque'])} {np.mean(self.safety_histories['joint_1_torque'])}")
-            else:
-                self.SAFETY_MODE = False
+        # if len(self.safety_histories['x_tool_torque']) == 10:
+        #     xtool_mean = np.mean(self.safety_histories['x_tool_torque']); joint1_mean = np.mean(self.safety_histories['joint_1_torque'])
+        #     if (xtool_mean > self.x_tool_thresh) or (joint1_mean <= self.joint_1_thresh):
+        #         self.SAFETY_MODE = True
+        #         print(f"SAFETY MODE ENGAGED: {np.mean(self.safety_histories['x_tool_torque'])} {np.mean(self.safety_histories['joint_1_torque'])}")
+        #     else:
+        #         self.SAFETY_MODE = False
+        # self.SAFETY_MODE = True
 
         try:
             gripper_pos = msg.interconnect.oneof_tool_feedback.gripper_feedback[0].motor[0].position
@@ -146,6 +150,10 @@ class BasicArm():
 
     def step(self, action, orientation_speed=None, translation_speed=None,
              clip_wrist_action=False):
+        if self.prev_eef is None:
+            print(f"Waiting for initial arm state message.")
+            return
+
         self.current_step += 1
 
         ## GRIPPER
@@ -175,7 +183,10 @@ class BasicArm():
                 action = [action[0], action[1], action[2], 0, 0, 0]
 
             if self.velocity_control:
-                expected_new_position = newx, newy, newz = self.prev_eef[:3] + [1.5 * (a * self.action_duration) for a in action[:3]]
+                print(self.prev_eef[:3], action[:3])
+                buffered_move_xyz = [1.5 * (a * self.action_duration) for a in action[:3]]
+                prev_xyz = self.prev_eef[:3]
+                expected_new_position = newx, newy, newz = [prev_p + dp for prev_p, dp in zip(prev_xyz, buffered_move_xyz)]
             else:
                 # Do not allow an action to take us beyond the workspace limits
                 expected_new_position = newx, newy, newz = self.prev_eef[:3] + action[:3]
@@ -203,7 +214,6 @@ class BasicArm():
                 if action[2] <= 0:
                     action = [0, 0, 0, 0, 0, 0, 0]
                     print("Safety mode engaged. Stopping non +z-movement.")
-                
             ### SAFETY CHECK
 
             if self.sim:
@@ -257,8 +267,24 @@ class BasicArm():
 if __name__ == '__main__':
     try:
         rospy.init_node("arm_reacher")
-        BasicArm()
-    except rospy.ROSInterruptException:
-        pass
+        rospy.sleep(1.0)
+        arm = BasicArm(robot_name="gen3_lite", velocity_control=True, sim=False)
+        arm.reset()
+        action = [0 for _ in range(7)]
+        
+        vx = 0.1
+        for i in range(20):
+            if i % 4 == 0: vx *= -1
+
+            action[0] = vx
+
+            arm.step(action)
+            
+            rospy.sleep(0.1)
+            print(i)
+        arm.close()
+    except rospy.ROSInterruptException as E:
+        print(E)
+
 
         

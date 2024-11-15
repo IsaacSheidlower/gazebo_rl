@@ -225,6 +225,7 @@ class ArmReacher(gym.Env):
                 rospy.sleep(0.15)
                 print(f"{self.current_step:4d} gripper action {action[6]} with state {self.gripper_state:1.2f}")
         else:
+            # from IPython import embed as ipshell; ipshell()
             if clip_wrist_action:
                 action = np.clip(np.array(action), self.min_action, self.max_action)
             else:
