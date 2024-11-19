@@ -57,7 +57,7 @@ class BasicArm():
         self.velocity_control = velocity_control
 
         print("Initializing arm", end='...')
-        self.arm = armpy.initialize(robot_name)
+        self.arm = armpy.initialize(robot_name.replace('my_', ''))
         print("Initialized arm")
         
         if workspace_limits is None:
@@ -65,7 +65,7 @@ class BasicArm():
         else:
             self.workspace_limits = workspace_limits
 
-        rospy.Subscriber(f"/my_{robot_name}/base_feedback", BaseCyclic_Feedback, self._base_feedback_callback)
+        rospy.Subscriber(f"/{robot_name}/base_feedback", BaseCyclic_Feedback, self._base_feedback_callback)
         self.SAFETY_MODE = False
         self.safety_histories = {
             "x_tool_torque": deque(maxlen=10),
@@ -268,7 +268,9 @@ if __name__ == '__main__':
     try:
         rospy.init_node("arm_reacher")
         rospy.sleep(1.0)
-        arm = BasicArm(robot_name="gen3_lite", velocity_control=True, sim=False)
+        robot_name = rospy.get_param('robot_name', ',my_gen3')
+        sim = rospy.get_param('sim', False)
+        arm = BasicArm(robot_name=robot_name, velocity_control=True, sim=sim)
         arm.reset()
         action = [0 for _ in range(7)]
         

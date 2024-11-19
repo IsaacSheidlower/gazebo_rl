@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import rospy
-from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Joy
 import numpy as np
 
 # Import the UIInterface and the specific UI class you want to use
@@ -11,7 +11,7 @@ from mouse_keyboard_expert import MouseKeyboardExpert
 class RobotControlNode:
     def __init__(self, ui: UIInterface):
         self.ui = ui
-        self.pub = rospy.Publisher('robot_control', Twist, queue_size=10)
+        self.pub = rospy.Publisher('joy', Joy, queue_size=10)
         rospy.init_node('robot_control_node', anonymous=True)
         self.rate = rospy.Rate(10)  # 10 Hz
 
@@ -19,23 +19,24 @@ class RobotControlNode:
         while not rospy.is_shutdown():
             action, buttons = self.ui.get_action()
             # Process the action and buttons as needed
-            twist_msg = self.process_action(action, buttons)
-            # Publish the Twist message to control the robot
-            self.pub.publish(twist_msg)
+            joy_msg = self.process_action(action, buttons)
+            # Publish the Joy message
+            self.pub.publish(joy_msg)
             self.rate.sleep()
 
-    def process_action(self, action: np.ndarray, buttons: dict) -> Twist:
-        # Convert action to Twist message
-        twist = Twist()
-        # Map the action to linear and angular velocities
-        # Adjust scaling factors as necessary
-        twist.linear.x = action[0] * 0.01
-        twist.linear.y = action[1] * 0.01
-        twist.linear.z = action[2] * 0.01
-        twist.angular.x = action[3] * 0.01
-        twist.angular.y = action[4] * 0.01
-        twist.angular.z = action[5] * 0.01
-        return twist
+    def process_action(self, action: np.ndarray, buttons: dict) -> Joy:
+        # Convert action and buttons to Joy message
+        joy = Joy()
+        # Map the action array to the axes field
+        joy.axes = action.tolist()
+
+        # Map the buttons dictionary to the buttons field
+        # Assuming buttons is a dictionary with button names as keys and boolean values
+        # Define the order of buttons to maintain consistency
+        button_order = ['mouse_left', 'mouse_button9', 'mouse_button8']  # Adjust based on actual buttons
+        joy.buttons = [int(buttons.get(button, 0)) for button in button_order]
+
+        return joy
 
 def main():
     # Instantiate the UI object (can be swapped with other UI implementations)
