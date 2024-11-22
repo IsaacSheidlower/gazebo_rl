@@ -27,17 +27,24 @@ import image_transport
 import datetime, time
 import os
 from pathlib import Path
-# # sys.path.append(os.path.expanduser('~/workspace/fastrl/nov20/second_wind/'))
-from lerobot.common.robot_devices.cameras.opencv import OpenCVCamera
-from lerobot.common.datasets.image_writer import AsyncImageWriter
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+import numpy as np
 
+from videorecorder import VideoRecorder
+# # sys.path.append(os.path.expanduser('~/workspace/fastrl/nov20/second_wind/'))
+from lerobot.common.robot_devices.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
+# from lerobot.common.datasets.image_writer import AsyncImageWriter
+
+CAMERA_WIDTH = 1280
+CAMERA_HEIGHT = 720
+CAMERA_FPS = 30
 
 class Camera():
     output_directory = None
     def __init__(self, camera):
         self.camera = camera
-        self.image_writer = AsyncImageWriter(num_processes=0, num_threads=1)
+        # self.image_writer = AsyncImageWriter(num_processes=0, num_threads=1)
+        self.video_recorder = None
+        self.timestamp_fp = None
 
     def output_directory_cb(self, msg):
         if msg.data:
@@ -49,72 +56,99 @@ class Camera():
         else:
             print(f"Output directory empty.")
             self.output_directory = None
+            if self.video_recorder: 
+                self.video_recorder.stop()
+                self.video_recorder = None
+            if self.timestamp_fp:
+                self.timestamp_fp.close()
 
     def run(self):
         self.camera.connect()
         # img_pubs = [rospy.Publisher(f"camera_obs_{str(c.port).replace('/', '_')}", Image, queue_size=1) for c in self.cameras]
         # image_transport_pubs = [image_transport.Publisher(f"camera_obs_{str(c.port).replace('/', '_')}") for c in cameras]
-        img_pub = rospy.Publisher(f"camera_obs_{str(self.camera.port).replace('/', '_')}", Image, queue_size=1)
+        pub_topic = f"camera_obs_{str(self.camera.port).replace('/', '_')}"
+        img_pub = rospy.Publisher(pub_topic, Image, queue_size=1)
+        print(f"Publishing on {pub_topic}")
         rospy.Subscriber('/uid_data_dir', String, self.output_directory_cb, queue_size=1)
-
-
-        bridge = CvBridge()
-        RATE_HZ = rospy.get_param("/observation_rate", 30)
-
+        # bridge = CvBridge()
         try:
             rospy.init_node("observation_pub", anonymous=True)
         except Exception as e:
             print(e)
 
-        rate = rospy.Rate(RATE_HZ, reset=True)
+        # rate = rospy.Rate(RATE_HZ, reset=True)
 
+        RATE_HZ = rospy.get_param("/observation_rate", 30)
         hearbeat_period = RATE_HZ * 10; heartbeat = 0
         while not rospy.is_shutdown():
             heartbeat += 1
             if heartbeat % hearbeat_period == 0: print("Observation publisher heartbeat.")
             # print("Observation publisher heartbeat.")
 
-
-            # if rospy.get_param("/pause", False):
-            #     rate.sleep()
-            #     print("PAUSED BY PARAMETER. Resetting weight tracking.")
-            #     tracked_weights = []; short_term_weights = []
-            #     continue
-
             try:
                 # for pub, cam in zip(img_pubs, cameras):
-                img = self.camera.async_read()
-                # cv2.imshow(f'{str(self.camera.port)} {img.shape}', img); cv2.waitKey(1)
-                # resized_image = cv2.resize(img, (32, 32), interpolation=cv2.INTER_LINEAR)
+                img = self.camera.read()
+                frame_time = rospy.Time.now()
+
+                # resized_image = img; #cv2.resize(img, (128, 128), interpolation=cv2.INTER_LINEAR)
+                
+                # ret, img = self.cap.read()
+                # if not ret:
+                #     print("Failed to read frame from the camera.")
+                #     break
+
+                # cv2.imshow(f'{str(self.camera.port)} {img.shape}', resized_image); cv2.waitKey(10)
                 # img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='rgb8')
                 # img_pub.publish(img_msg)
 
                 # write out the images if we have an output_directory
-                if self.output_directory and self.image_writer:
-                    fn = str(rospy.Time.now())+'.png'
-                    fpath = self.output_directory / fn
-                    print(f"Writing {fpath}")
-                    self.image_writer.save_image(image=img, fpath=fpath)
+                if self.output_directory:
+                    # if self.image_writer:
+                    #     fn = str(rospy.Time.now())+'.png'
+                    #     fpath = self.output_directory / fn
+                    #     print(f"Writing {fpath}")
+                    #     self.image_writer.save_image(image=img, fpath=fpath)
+                    if self.video_recorder:
+                        self.video_recorder.write_frame(img)
+                        self.timestamp_fp.write(str(frame_time)+'\n')
+                    else:
+                        self.video_recorder = VideoRecorder(
+                            video_file=rospy.get_param('~video_file', str(self.output_directory) + '/output.mp4'),
+                            codec=rospy.get_param('~codec', 'mp4v'),
+                            fps=rospy.get_param('~fps', self.camera.fps),
+                            frame_size=(
+                                rospy.get_param('~frame_width', self.camera.width),
+                                rospy.get_param('~frame_height', self.camera.height)
+                            ),
+                            max_queue_size=rospy.get_param('~max_queue_size', 100)
+                        )
+                        self.video_recorder.start()
+                        self.timestamp_fp = open(str(self.output_directory / 'video_frame_timestamps.txt'), 'w')
 
             except Exception as e:
                 print("Error publishing observation.", e)        
-            rate.sleep()
 
     def stop(self):
         self.camera.disconnect()
-        if self.image_writer is not None:
-            self.image_writer.wait_until_done()
-            self.image_writer.stop()
-            self.image_writer = None
+        # if self.image_writer is not None:
+        #     self.image_writer.wait_until_done()
+        #     self.image_writer.stop()
+        #     self.image_writer = None
+        if self.video_recorder: self.video_recorder.stop()
+        if self.timestamp_fp: self.timestamp_fp.close()
+
+        
 
 if __name__ == '__main__':
     import cv2
+    cv2.destroyAllWindows()
     sim = False #rospy.get_param("/sim", False)
 
     # Allow for command line argument
     import sys
     camid = int(sys.argv[1]) if len(sys.argv) == 2 else 0
-    camera = OpenCVCamera(camid)
+    cfg = OpenCVCameraConfig(CAMERA_FPS, CAMERA_WIDTH, CAMERA_HEIGHT)
+    camera = OpenCVCamera(camid, cfg)
 
     # repo_id = 'aabl_test'
     # LeRobotDatasetMetadata.create(repo_id, fps=30)
