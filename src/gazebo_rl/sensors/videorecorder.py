@@ -2,6 +2,7 @@ import cv2
 import threading
 import queue
 import logging
+import time
 
 class VideoRecorder:
     def __init__(self, video_file, codec='H264', fps=30, frame_size=(640, 480), max_queue_size=100):
@@ -22,7 +23,7 @@ class VideoRecorder:
         self.frame_queue = queue.Queue(maxsize=max_queue_size)
         self.is_recording = False
         self.writer_thread = None
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(self.__class__.__name__ + str(time.time()))
         self.logger.setLevel(logging.INFO)
         handler = logging.StreamHandler()
         formatter = logging.Formatter('[%(levelname)s] %(name)s: %(message)s')
@@ -30,14 +31,15 @@ class VideoRecorder:
         self.logger.addHandler(handler)
 
     def start(self):
+        print('videorecorder start')
         """Starts the video recording."""
         if self.is_recording:
             self.logger.warning("Recording is already in progress.")
             return
         self.is_recording = True
-        self.writer_thread = threading.Thread(target=self._video_writer, daemon=True)
+        self.writer_thread = threading.Thread(target=self._video_writer)
         self.writer_thread.start()
-        self.logger.info("Video recording started.")
+        self.logger.info(f"Video recording started. id {id(self)}")
 
     def stop(self):
         """Stops the video recording."""
@@ -79,12 +81,12 @@ class VideoRecorder:
                 if frame is None:
                     self.logger.info("none frame")
                     break
-                self.logger.info(f"before write {str(frame.shape)}")
+                # self.logger.info(f"before write {str(frame.shape)}")
                 try:
                     out.write(frame)
                 except Exception as e:
                     self.logger.error(f"Failed to write frame {e}")
-                self.logger.info("after write")
+                # self.logger.info("after write")
                 self.frame_queue.task_done()
         except Exception as e:
             self.logger.error(f"An exception occurred in the writer thread: {e}")
