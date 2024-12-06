@@ -59,9 +59,9 @@ class BasicArm():
 
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        self.logger.info("Initializing arm", end='...')
+        print("Initializing arm...")
         self.arm = armpy.initialize(robot_name.replace('my_', ''))
-        self.logger.info("Initialized arm")
+        print("Initialized arm")
         
         if workspace_limits is None:
             self.workspace_limits = [*xbounds, *ybounds, *zbounds]
@@ -82,8 +82,8 @@ class BasicArm():
         self._eef_lock = threading.Lock()
         self._eef_time = time.time()
         self.LITE = 'lite' in robot_name
-        if self.LITE: self.logger.info(f"Using gen3_lite")
-        else: self.logger.info(f"Using gen3")
+        if self.LITE: print(f"Using gen3_lite")
+        else: print(f"Using gen3")
 
     def _base_feedback_callback(self, msg: BaseCyclic_Feedback):
         '''
@@ -92,24 +92,23 @@ class BasicArm():
         '''
         self.safety_histories['x_tool_torque'].append(msg.base.tool_external_wrench_torque_x)
         self.safety_histories['joint_1_torque'].append(msg.actuators[1].torque)
-        if len(self.safety_histories['x_tool_torque']) == 10:
-            xtool_mean = np.mean(self.safety_histories['x_tool_torque']); joint1_mean = np.mean(self.safety_histories['joint_1_torque'])
-            if (xtool_mean > self.x_tool_thresh) or (joint1_mean <= self.joint_1_thresh):
-                self.SAFETY_MODE = True
-                self.logger.info(f"SAFETY MODE ENGAGED: {np.mean(self.safety_histories['x_tool_torque'])} {np.mean(self.safety_histories['joint_1_torque'])}")
-            else:
-                self.SAFETY_MODE = False
-
+        # if len(self.safety_histories['x_tool_torque']) == 10:
+        #     xtool_mean = np.mean(self.safety_histories['x_tool_torque']); joint1_mean = np.mean(self.safety_histories['joint_1_torque'])
+        #     if (xtool_mean > self.x_tool_thresh) or (joint1_mean <= self.joint_1_thresh):
+        #         self.SAFETY_MODE = True
+        #         print(f"SAFETY MODE ENGAGED: {np.mean(self.safety_histories['x_tool_torque'])} {np.mean(self.safety_histories['joint_1_torque'])}")
+        #     else:
+        #         self.SAFETY_MODE = False
         try:
             gripper_pos = msg.interconnect.oneof_tool_feedback.gripper_feedback[0].motor[0].position
         except:
-            self.logger.info("ERROR: no gripper feedback received")
+            print("ERROR: no gripper feedback received")
             gripper_pos = 0.0
 
         with self._eef_lock:
             self._eef = np.array([msg.base.tool_pose_x, msg.base.tool_pose_y, msg.base.tool_pose_z, gripper_pos])
             dt = time.time() - self._eef_time
-            if dt > 5: self.logger.info(f"WARN: EEF time: {dt} seconds.")
+            if dt > 5: print(f"WARN: EEF time: {dt} seconds.")
             self._eef_time = time.time()
 
     def sync_copy_eef(self):
@@ -117,20 +116,20 @@ class BasicArm():
             return self._eef.copy()
     
     def stop_motion(self):
-        self.logger.info("Stopping motion")
+        print("Stopping motion")
         self.arm.stop_arm()
         rospy.sleep(0.25)
         self.arm.cartesian_velocity_command([0 for _ in range(7)], duration=self.action_duration, radians=True)
         rospy.sleep(0.25)
-        self.logger.info("\tHopefully stopped motion")
+        print("\tHopefully stopped motion")
 
     def reset(self):
         self.current_step = 0
         if not self.sim:
             self.arm.stop_arm()
-            self.logger.info(f"RESET {'- sim' if self.sim else ''}")
+            print(f"RESET {'- sim' if self.sim else ''}")
             while rospy.get_param("/pause", False):
-                self.logger.info("Waiting for pause to be lifted before resetting.")
+                print("Waiting for pause to be lifted before resetting.")
                 rospy.sleep(1)
             self.arm.clear_faults()
             rospy.sleep(.25)
@@ -151,28 +150,32 @@ class BasicArm():
         return self.prev_eef
 
     def step(self, action, orientation_speed=None, translation_speed=None, clip_wrist_action=False):
+        print([f'{entry:+1.3f}' for entry in action])
+
         if self.prev_eef is None:
-            self.logger.info(f"Waiting for initial arm state message.")
+            print(f"Waiting for initial arm state message.")
+            self.prev_eef = self.sync_copy_eef()
             return
+
 
         self.current_step += 1
 
         ## GRIPPER
-        if len(action) == 7 and action[6] != 0:
+        if len(action) == 7 and abs(action[6]) > 0.01:
             if self.SAFETY_MODE:
-                self.logger.info("Safety mode engaged. Gripper action ignored.")
+                print("Safety mode engaged. Gripper action ignored.")
                 pass
             else:
                 if self.velocity_control: # send a 0 vel to prevent the arm from moving while grippering
                     self.arm.stop_arm()
 
-                gripper_open = True if (self.gripper_state and self.gripper_state < 0.5) else False # NOTE: the initial motor position of the gripper seems to be variable based on unknown factors.
+                gripper_open = True if (self.gripper_state and self.gripper_state > 0.0) else False # NOTE: the initial motor position of the gripper seems to be variable based on unknown factors.
 
                 if action[6] == 1 and not gripper_open:
                     self.arm.open_gripper()
                 elif action[6] == -1 and gripper_open: # prevent gripper faults
                     self.arm.close_gripper()
-                self.logger.info(f"{self.current_step:4d} gripper action {action[6]} with state {self.gripper_state:1.2f}")
+                print(f"{self.current_step:4d} gripper action {action[6]} with state {self.gripper_state:1.2f}")
         else:
             # from IPython import embed as ipshell; ipshell()
             if clip_wrist_action:
@@ -190,18 +193,18 @@ class BasicArm():
 
             prev_state_str = f"{self.prev_eef[0]:+1.2f} {self.prev_eef[1]:+1.2f} {self.prev_eef[2]:+1.2f}"
             pred_state_str = f"{newx:+1.2f} {newy:+1.2f} {newz:+1.2f}"
-            self.logger.info(f"{self.current_step:4d} dp: {prev_state_str} -> {pred_state_str} from action {action[:3]}")
+            # print(f"{self.current_step:4d} dp: {prev_state_str} -> {pred_state_str} from action {action[:3]}")
 
             # NOTE: UGLY HARDCODINGS FOR FLOWERBED TASK
-            if (newx < self.workspace_limits[0] and action[0] < 0) or (newx > self.workspace_limits[1] and action[0] > 0): action[0] = 0 # self.logger.info("x out of bounds. stopping.")
-            if (newy < self.workspace_limits[2] and action[1] < 0) or (newy > self.workspace_limits[3] and action[1] > 0): action[1] = 0 # self.logger.info("y out of bounds. stopping.")
+            if (newx < self.workspace_limits[0] and action[0] < 0) or (newx > self.workspace_limits[1] and action[0] > 0): action[0] = 0 # print("x out of bounds. stopping.")
+            if (newy < self.workspace_limits[2] and action[1] < 0) or (newy > self.workspace_limits[3] and action[1] > 0): action[1] = 0 # print("y out of bounds. stopping.")
             
             ### SAFETY CHECK
-            if self.SAFETY_MODE:
-                # Only allow the arm to move up in the z-direction
-                if action[2] <= 0:
-                    action = [0, 0, 0, 0, 0, 0, 0]
-                    self.logger.info("Safety mode engaged. Stopping non +z-movement.")
+            # if self.SAFETY_MODE:
+            #     # Only allow the arm to move up in the z-direction
+            #     if action[2] <= 0:
+            #         action = [0, 0, 0, 0, 0, 0, 0]
+            #         print("Safety mode engaged. Stopping non +z-movement.")
             ### SAFETY CHECK
 
             if self.sim:
@@ -230,7 +233,7 @@ class BasicArm():
                         if self.velocity_control:
                             self.arm.cartesian_velocity_command(action, duration=self.action_duration, radians=True)
                         else:
-                            # self.logger.info("goto_cartesian_pose_old")
+                            # print("goto_cartesian_pose_old")
                             self.arm.goto_cartesian_pose_old(action, relative=True, radians=True, 
                                                             translation_speed=translation_speed, orientation_speed=orientation_speed)
                             rospy.sleep(self.action_duration)
@@ -271,10 +274,10 @@ if __name__ == '__main__':
             arm.step(action)
             
             rospy.sleep(0.1)
-            self.logger.info(i)
+            print(i)
         arm.close()
     except rospy.ROSInterruptException as E:
-        self.logger.info(E)
+        print(E)
 
 
         

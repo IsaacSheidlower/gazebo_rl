@@ -13,7 +13,7 @@ class RobotControlNode:
         self.ui = ui
         self.pub = rospy.Publisher('joy', Joy, queue_size=10)
         rospy.init_node('robot_control_node', anonymous=True)
-        self.rate = rospy.Rate(10)  # 10 Hz
+        self.rate = rospy.Rate(30)  # 10 Hz
 
     def run(self):
         while not rospy.is_shutdown():

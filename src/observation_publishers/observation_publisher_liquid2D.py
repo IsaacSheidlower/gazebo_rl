@@ -67,6 +67,8 @@ def eef_pose(data):
 #     current_observation[12] = joint_pose[7]
 
 
+
+
 def observation_publisher():
     pub = rospy.Publisher("rl_observation", ObsMessage, queue_size=3)
     rospy.Subscriber("/my_gen3/base_feedback", BaseCyclic_Feedback, callback=eef_pose)

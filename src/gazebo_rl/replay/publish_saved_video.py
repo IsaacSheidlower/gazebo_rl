@@ -10,8 +10,10 @@ import time
 import cv2
 import numpy as np
 import cv_bridge
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, Joy
 from collections import deque
+
+import std_msgs.msg
 
 def get_memory_usage():
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -77,7 +79,7 @@ class VideoLoader:
         """
         Open video files for streaming.
         """
-        self.captures = [cv2.VideoCapture(path) for path in self.video_paths]
+        self.captures = [cv2.VideoCapture(str(path)) for path in self.video_paths]
         for i, cap in enumerate(self.captures):
             if not cap.isOpened():
                 raise ValueError(f"Cannot open video file: {self.video_paths[i]}")
@@ -125,12 +127,13 @@ class VideoLoader:
         if (endT - t0) > 0.01:
             rospy.logwarn(f"Video read took longer than 0.01 seconds: {(endT - t0)=}")
         return ret_frames
-
+    
 
 class BagVideoPublisher():
     def __init__(self, path):
         # dirname is also the name of the camera topic live
         rospy.init_node('bagvideopublisher', anonymous=True)
+
 
         bridge = cv_bridge.CvBridge()
         bag = rosbag.Bag(str(path / 'trial_data.bag'))
@@ -202,9 +205,12 @@ if __name__ == '__main__':
 
     print(f"Playing back from {path}")
 
+    import std_msgs
+    bag_complete_pub = rospy.Publisher('/playback_complete', std_msgs.msg.Bool, latch=False)
     try:
         BagVideoPublisher(path)
     except rospy.ROSInterruptException:
         pass
     finally:
+        bag_complete_pub.publish(std_msgs.msg.Bool(True))
         print(f"Stopping")
