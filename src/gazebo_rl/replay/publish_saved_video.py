@@ -182,7 +182,7 @@ class BagVideoPublisher():
                 frame = camera_frames[cidx]
                 if frame is not None:
                     aframe = cv2.putText(frame, f'{tsec:1.5f}', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1., (255,0,0), 2)
-                    cv2.imshow(f'{cidx=}', aframe)
+                    cv2.imshow(f'{cidx=} {ctopic=}', aframe)
                     ros_publisher[ctopic].publish(bridge.cv2_to_imgmsg(frame))
                     cv2.waitKey(1)
                     pnum += 1

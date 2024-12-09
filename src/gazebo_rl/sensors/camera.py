@@ -71,7 +71,7 @@ class Camera():
 
         # img_pubs = [rospy.Publisher(f"camera_obs_{str(c.port).replace('/', '_')}", Image, queue_size=1) for c in self.cameras]
         # image_transport_pubs = [image_transport.Publisher(f"camera_obs_{str(c.port).replace('/', '_')}") for c in cameras]
-        pub_topic = f"camera_obs_{str(self.camera.port).replace('/', '_')}"
+        pub_topic = f"camera_obs_{str(self.camera.port).replace('/', '_')}_96x96"
         img_pub = rospy.Publisher(pub_topic, Image, queue_size=1)
         print(f"Publishing on {pub_topic}")
 
@@ -94,7 +94,7 @@ class Camera():
                 img = self.camera.read()
                 frame_time = rospy.Time.now()
 
-                resized_image = img; #cv2.resize(img, (128, 128), interpolation=cv2.INTER_LINEAR)
+                resized_image = cv2.resize(img, (96, 96), interpolation=cv2.INTER_LINEAR)
                 
                 # ret, img = self.cap.read()
                 # if not ret:
@@ -102,7 +102,7 @@ class Camera():
                 #     break
 
                 cv2.imshow(f'{str(self.camera.port)} {img.shape}', resized_image); cv2.waitKey(10)
-                img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='rgb8')
+                img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='bgr8')
                 img_pub.publish(img_msg)
 
                 # write out the images if we have an output_directory

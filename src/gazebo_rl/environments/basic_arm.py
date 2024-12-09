@@ -113,7 +113,11 @@ class BasicArm():
 
     def sync_copy_eef(self):
         with self._eef_lock:
-            return self._eef.copy()
+            if self._eef is not None:
+                self.gripper_state = self._eef[-1]
+                return self._eef.copy()
+            else:
+                return None
     
     def stop_motion(self):
         print("Stopping motion")
@@ -173,8 +177,10 @@ class BasicArm():
 
                 if action[6] == 1 and not gripper_open:
                     self.arm.open_gripper()
+                    self.gripper_state = 1
                 elif action[6] == -1 and gripper_open: # prevent gripper faults
                     self.arm.close_gripper()
+                    self.gripper_state = -1
                 print(f"{self.current_step:4d} gripper action {action[6]} with state {self.gripper_state:1.2f}")
         else:
             # from IPython import embed as ipshell; ipshell()
