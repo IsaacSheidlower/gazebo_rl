@@ -101,7 +101,7 @@ class Camera():
                 #     print("Failed to read frame from the camera.")
                 #     break
 
-                cv2.imshow(f'{str(self.camera.port)} {img.shape}', resized_image); cv2.waitKey(10)
+                cv2.imshow(f'{str(self.camera.port)} {img.shape}', img); cv2.waitKey(10)
                 img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='bgr8')
                 img_pub.publish(img_msg)
 
