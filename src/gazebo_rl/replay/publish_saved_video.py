@@ -1,18 +1,15 @@
 #!/home/j/workspace/lerobot/venv/bin/python
-
-
 import rospy
 import rosbag
 import os, sys, resource
 from pathlib import Path
 import time
-
 import cv2
 import numpy as np
 import cv_bridge
 from sensor_msgs.msg import Image, Joy
 from collections import deque
-
+from armpy import kortex_arm
 import std_msgs.msg
 
 def get_memory_usage():
@@ -150,6 +147,7 @@ class BagVideoPublisher():
             if topic in ros_publisher: continue
             else:
                 ros_publisher[topic] = rospy.Publisher(topic, type(msg), queue_size=1); log_msg_types[topic] = type(msg)
+                print("topic:", topic)
         for topic in video_loader.dirs:
             ros_publisher[topic] = rospy.Publisher(topic, Image, queue_size=1); log_msg_types[topic] = Image
 
@@ -161,7 +159,9 @@ class BagVideoPublisher():
         rospy.loginfo(f"Using {get_memory_usage()} MB")
 
         import time
+        
         t0 = None; walltime = rospy.Time.now(); pnum = 0
+
         for topic, msg, t in bag.read_messages():
             tsec = t.to_sec()
             if t0 is None: # first message 
@@ -174,17 +174,18 @@ class BagVideoPublisher():
                 rospy.sleep(sleeptime)
                 walltime = rospy.Time.now(); t0 = t
 
-
+            
             ros_publisher[topic].publish(msg)
 
+            
             camera_frames = video_loader.get_frame_if_available(t)
             for cidx, ctopic in enumerate(video_loader.dirs):
                 frame = camera_frames[cidx]
                 if frame is not None:
-                    aframe = cv2.putText(frame, f'{tsec:1.5f}', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1., (255,0,0), 2)
-                    cv2.imshow(f'{cidx=} {ctopic=}', aframe)
+                    # aframe = cv2.putText(frame, f'{tsec:1.5f}', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1., (255,0,0), 2)
+                    # cv2.imshow(f'{cidx=} {ctopic=}', aframe)
                     ros_publisher[ctopic].publish(bridge.cv2_to_imgmsg(frame))
-                    cv2.waitKey(1)
+                    # cv2.waitKey(1)
                     pnum += 1
 
             rospy.logdebug(f'{tsec:1.2f} {sleeptime:1.3f} {topic}')
@@ -204,7 +205,10 @@ if __name__ == '__main__':
     path = Path(args.root).expanduser() / args.directory
 
     print(f"Playing back from {path}")
-
+    # print("hahahah")
+    # arm = kortex_arm.Arm()
+    # arm.home_arm()
+    # print('done')
     import std_msgs
     bag_complete_pub = rospy.Publisher('/playback_complete', std_msgs.msg.Bool, latch=False)
     try:
