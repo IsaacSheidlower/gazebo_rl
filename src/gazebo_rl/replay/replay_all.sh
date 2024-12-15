@@ -17,5 +17,5 @@ do
     # keep the leading 0
     i=$(printf "%03d" $i)
     echo "Replaying episode $i"
-    python publish_saved_video.py -d user_$i
+    python publish_saved_video.py -d user_$i --no-arm
 done

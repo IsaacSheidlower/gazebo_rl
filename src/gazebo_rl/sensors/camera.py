@@ -158,11 +158,11 @@ if __name__ == '__main__':
     # Allow for command line argument
     import sys
     camid = int(sys.argv[1]) if len(sys.argv) == 2 else 0
+    # camid = f'/dev/camera{sys.argv[1]}' if len(sys.argv) == 2 else 0
 
     # camid = rospy.get_param('~camid', 0)
 
     print(f"{camid=}")
-    # camid = f'/dev/camera{sys.argv[1]}' if len(sys.argv) == 2 else 0
     cfg = OpenCVCameraConfig(CAMERA_FPS, CAMERA_WIDTH, CAMERA_HEIGHT)
     camera = OpenCVCamera(camid, cfg)
 

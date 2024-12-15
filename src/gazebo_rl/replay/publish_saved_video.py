@@ -11,6 +11,7 @@ from sensor_msgs.msg import Image, Joy
 from collections import deque
 from armpy import kortex_arm
 import std_msgs.msg
+import armpy
 
 def get_memory_usage():
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -127,10 +128,12 @@ class VideoLoader:
     
 
 class BagVideoPublisher():
-    def __init__(self, path):
+    def __init__(self, path, stop_arm=False):
         # dirname is also the name of the camera topic live
         rospy.init_node('bagvideopublisher', anonymous=True)
 
+        if not args.no_arm:
+            arm = armpy.initialize('gen3_lite')
 
         bridge = cv_bridge.CvBridge()
         bag = rosbag.Bag(str(path / 'trial_data.bag'))
@@ -174,9 +177,18 @@ class BagVideoPublisher():
                 rospy.sleep(sleeptime)
                 walltime = rospy.Time.now(); t0 = t
 
+            if 'cartesian' in topic:
+                if stop_arm: continue
+            elif 'joy' in topic:
+                if args.no_arm:
+                    pass
+                else:
+                    if msg.buttons[4] == 1 or msg.buttons[6] == 1:
+                        arm.send_gripper_command(0.1, mode = 'speed', duration = 200, relative=True, block=False)
+                    elif msg.buttons[5] == 1 or msg.buttons[7] == 1:
+                        arm.send_gripper_command(-10* 0.1, mode = 'speed', duration = 200, relative=True, block=False)
             
             ros_publisher[topic].publish(msg)
-
             
             camera_frames = video_loader.get_frame_if_available(t)
             for cidx, ctopic in enumerate(video_loader.dirs):
@@ -200,6 +212,8 @@ if __name__ == '__main__':
     # parser.add_argument('-d1', '--dir1', type=str, required=True)
     parser.add_argument('-p', '--root', type=str, default='~/')
     parser.add_argument('-dir', '--directory', type=str, required=True)
+    parser.add_argument('-s', '--stop-arm', action='store_true')
+    parser.add_argument('-na', '--no-arm', action='store_true')
     args = parser.parse_args()
 
     path = Path(args.root).expanduser() / args.directory
@@ -212,9 +226,12 @@ if __name__ == '__main__':
     import std_msgs
     bag_complete_pub = rospy.Publisher('/playback_complete', std_msgs.msg.Bool, latch=False)
     try:
-        BagVideoPublisher(path)
+        BagVideoPublisher(path, args.stop_arm)
     except rospy.ROSInterruptException:
         pass
     finally:
         bag_complete_pub.publish(std_msgs.msg.Bool(True))
         print(f"Stopping")
+
+
+    # example 
