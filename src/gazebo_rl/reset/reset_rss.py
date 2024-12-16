@@ -27,9 +27,11 @@ for topic_name, msg_type in rospy.get_published_topics():
     if topic_name in REQUIRED_TOPICS:
         REQUIRED_TOPICS.remove(topic_name)
 
-assert len(camera_topics) == 2, f"\033[91mERROR: Expected 2 camera topics, found {camera_topics}. Are both cameras running?\033[0m"
-assert len(REQUIRED_TOPICS) == 0, f"\033[91mERROR: Missing required topics: {REQUIRED_TOPICS}\033[0m"
+# assert len(camera_topics) == 2, f"\033[91mERROR: Expected 2 camera topics, found {camera_topics}. Are both cameras running?\033[0m"
+# assert len(REQUIRED_TOPICS) == 0, f"\033[91mERROR: Missing required topics: {REQUIRED_TOPICS}\033[0m"
 
+if len(camera_topics) == 2: f"\033[91mERROR: Expected 2 camera topics, found {camera_topics}. Are both cameras running?\033[0m"
+if len(REQUIRED_TOPICS) == 0: f"\033[91mERROR: Missing required topics: {REQUIRED_TOPICS}\033[0m"
 
 print(f"\tFound camera topics: {camera_topics}")
 

@@ -183,16 +183,15 @@ class BasicArm():
         #         print(f"{self.current_step:4d} gripper action {action[6]} with state {self.gripper_state:1.2f}")
         # else:
         # from IPython import embed as ipshell; ipshell()
+
+        # Dont' normalize the gripper command (dimension 6)
+        
+        gripper = action[6]
         action = np.clip(np.array(action), self.min_action, self.max_action)
-        # action = [action[0], action[1], action[2], 0, 0, 0]
+        action[6] = gripper
 
         # NOTE: temporary mapping to align with config
-        action = [0.7 * action[1], 0.7 * action[0], 0.5 * action[2], 0, 0, action[5], action[6]]
-        # print([f'{entry:+1.3f}' for entry in action])
-
-
-
-
+        action = [action[1], action[0], action[2], 0, 0, action[5], action[6]]
 
         if self.velocity_control:
             buffered_move_xyz = [1.5 * (a * self.action_duration) for a in action[:3]]
@@ -204,8 +203,12 @@ class BasicArm():
         pred_state_str = f"{newx:+1.2f} {newy:+1.2f} {newz:+1.2f}"
         # print(f"{self.current_step:4d} dp: {prev_state_str} -> {pred_state_str} from action {action[:3]}")
 
-        if newz <= 0.05 or newz >= 0.6:
+        if (newz <= 0.05 and action[2] < 0) or (newz >= 0.6 and action[2] > 0):
             action[2] = 0
+        elif (newx <= 0.3 and action[0] < 0) or (newx >= 0.8 and action[0] > 0):
+            action[0] = 0
+        elif (newy <= -0.25 and action[1] < 0) or (newy >= 0.25 and action[1] > 0):
+            action[1] = 0
 
 
         # NOTE: UGLY HARDCODINGS FOR FLOWERBED TASK
@@ -247,9 +250,19 @@ class BasicArm():
                         # if abs(action[6]) > 0.3:
                         #     gripper_dir = 1 if action[6] > 0 else -1 
                         #     self.arm.send_gripper_command(gripper_dir*1, mode = 'speed', duration = 200, relative=True, block=False)
-                        self.arm.send_gripper_command(action[6], mode = 'speed', duration = 200, relative=True, block=False)
+                        if abs(action[6]) > 0.5:
+                            if action[6] > 0:
+                                print(f"    Closing gripper")
+                                self.arm.close_gripper(block=False)
+                            else:
+                                print(f"    Open gripper")
+                                self.arm.open_gripper(block=False)
+                        elif abs(action[6]) > 0.01:
+                            # print(f"    Gripper action {action[6]:1.2f}")
+                            self.arm.send_gripper_command(action[6], mode = 'speed', duration = 200, relative=True, block=False)
+                            # rospy.sleep(0.1)
                         # action = [0, 0, 0, 0, 0, 0]
-                        self.arm.cartesian_velocity_command(action, duration=self.action_duration, radians=True, block=False)
+                        self.arm.cartesian_velocity_command(action[:6], duration=self.action_duration, radians=True, block=False)
                     else:
                         # print("goto_cartesian_pose_old")
                         self.arm.goto_cartesian_pose_old(action, relative=True, radians=True, 
