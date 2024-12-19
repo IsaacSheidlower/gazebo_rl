@@ -203,7 +203,7 @@ class BasicArm():
         pred_state_str = f"{newx:+1.2f} {newy:+1.2f} {newz:+1.2f}"
         # print(f"{self.current_step:4d} dp: {prev_state_str} -> {pred_state_str} from action {action[:3]}")
 
-        if (newz <= 0.05 and action[2] < 0) or (newz >= 0.6 and action[2] > 0):
+        if (newz <= 0.01 and action[2] < 0) or (newz >= 0.6 and action[2] > 0):
             action[2] = 0
         elif (newx <= 0.3 and action[0] < 0) or (newx >= 0.8 and action[0] > 0):
             action[0] = 0

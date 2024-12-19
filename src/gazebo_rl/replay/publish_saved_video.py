@@ -165,17 +165,29 @@ class BagVideoPublisher():
         
         t0 = None; walltime = rospy.Time.now(); pnum = 0
 
+        if args.no_arm:
+            AT_FIRST_POSE = True # don't need to move the arm
+        else:
+            for topic, msg, t in bag.read_messages('/my_gen3_lite/base_feedback/joint_states'):
+                arm.goto_joint_pose(msg.position, radians=True, block=False)
+                break
+            time.sleep(5)
+
+
         for topic, msg, t in bag.read_messages():
             tsec = t.to_sec()
             if t0 is None: # first message 
                 t0 = t; walltime = rospy.Time.now(); sleeptime = 0
-            else:
+            elif not args.no_arm: # If we are using the arm, we need to publish the messages in real time
                 # how long should we sleep?
                 dwalltime = (rospy.Time.now() - walltime).to_sec()
                 drostime = (t - t0).to_sec()
                 sleeptime = max(0, drostime - dwalltime)
                 rospy.sleep(sleeptime)
                 walltime = rospy.Time.now(); t0 = t
+            else:
+                # if we are not using the arm, we can publish as fast as we can
+                pass
 
             if 'cartesian' in topic:
                 if stop_arm: continue
