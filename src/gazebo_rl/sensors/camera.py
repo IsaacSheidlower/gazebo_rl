@@ -47,6 +47,20 @@ class Camera():
         self.timestamp_fp = None
         self.frame_times = [] # for debugging
 
+        self.crop_dim = rospy.get_param('crop_dim', 0); 
+        self.crop_left_offset = rospy.get_param('crop_left_offset', 0)
+        
+        self.top_index = rospy.get_param('top_index', '4');
+        self.bottom_index = rospy.get_param('bottom_index', '0')
+
+        print(f"{self.top_index=}, {self.bottom_index=} {self.camera.port=}")
+        if self.top_index in str(self.camera.port):
+            print(f"TOP camera: {self.camera.port}")
+            self.TOP = True
+        else:
+            print(f"BOTTOM camera: {self.camera.port}")
+            self.TOP = False
+
     def output_directory_cb(self, msg):
         if msg.data:
             self.output_directory = Path(msg.data) / f"cam{str(self.camera.port).replace('/', '_')}"
@@ -94,6 +108,14 @@ class Camera():
                 img = self.camera.read()
                 frame_time = rospy.Time.now()
 
+                if self.crop_dim > 0:
+                    # crop from the right edge for TOP image
+                    if self.TOP:
+                        img = img[:self.crop_dim, self.crop_left_offset:self.crop_dim+self.crop_left_offset]
+                    else:
+                        # crop from the left, no offset for BOTTOM image
+                        img = img[:self.crop_dim, -self.crop_dim:]
+
                 resized_image = cv2.resize(img, (96, 96), interpolation=cv2.INTER_LINEAR)
                 
                 # ret, img = self.cap.read()
@@ -101,7 +123,7 @@ class Camera():
                 #     print("Failed to read frame from the camera.")
                 #     break
 
-                cv2.imshow(f'{str(self.camera.port)} {img.shape}', img); cv2.waitKey(10)
+                # cv2.imshow(f'{str(self.camera.port)} {img.shape}', img); cv2.waitKey(10)
                 img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='bgr8')
                 img_pub.publish(img_msg)
 

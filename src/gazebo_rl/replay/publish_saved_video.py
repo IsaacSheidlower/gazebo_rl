@@ -128,7 +128,10 @@ class VideoLoader:
     
 
 class BagVideoPublisher():
-    def __init__(self, path, stop_arm=False):
+    def __init__(self, path, args):
+        stop_arm = args.stop_arm
+        SHOW_FIRST_FRAME = True
+
         # dirname is also the name of the camera topic live
         rospy.init_node('bagvideopublisher', anonymous=True)
 
@@ -153,7 +156,7 @@ class BagVideoPublisher():
                 print("topic:", topic)
         for topic in video_loader.dirs:
             ros_publisher[topic] = rospy.Publisher(topic, Image, queue_size=1); log_msg_types[topic] = Image
-
+            print(f"Video topic: {topic}")
         for k,v in ros_publisher.items():
             print(k, log_msg_types[k])
         rospy.sleep(0.1)
@@ -173,6 +176,10 @@ class BagVideoPublisher():
                 break
             time.sleep(5)
 
+
+        crop_dim = rospy.get_param('crop_dim', 0); crop_left_offset = rospy.get_param('crop_left_offset', 0)
+        top_index = rospy.get_param('top_index', '4'); bottom_index = rospy.get_param('bottom_index', '0')
+        # image_w = None; image_h = None
 
         for topic, msg, t in bag.read_messages():
             tsec = t.to_sec()
@@ -206,11 +213,27 @@ class BagVideoPublisher():
             for cidx, ctopic in enumerate(video_loader.dirs):
                 frame = camera_frames[cidx]
                 if frame is not None:
-                    # aframe = cv2.putText(frame, f'{tsec:1.5f}', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1., (255,0,0), 2)
-                    # cv2.imshow(f'{cidx=} {ctopic=}', aframe)
+                    if crop_dim > 0:
+                        # crop from the right edge for TOP image
+                        if top_index in ctopic:
+                            frame = frame[:crop_dim, crop_left_offset:crop_dim+crop_left_offset]
+                        else:
+                            # crop from the left, no offset for BOTTOM image
+                            frame = frame[:crop_dim, -crop_dim:]
+                            # h, w = frame.shape[:2]
+                            # x0 = (w - crop_dim) // 2
+                            # y0 = (h - crop_dim) // 2
+                            # frame = frame[y0:y0+crop_dim, x0:x0+crop_dim]
+                    
+                    if args.show_video or SHOW_FIRST_FRAME:
+                        cv2.imshow(f'{cidx=} {ctopic=} {frame.shape=}', frame)
+                        cv2.waitKey(1)
+
                     ros_publisher[ctopic].publish(bridge.cv2_to_imgmsg(frame))
                     # cv2.waitKey(1)
                     pnum += 1
+
+            if pnum > 10: SHOW_FIRST_FRAME = False
 
             rospy.logdebug(f'{tsec:1.2f} {sleeptime:1.3f} {topic}')
 
@@ -226,7 +249,20 @@ if __name__ == '__main__':
     parser.add_argument('-dir', '--directory', type=str, required=True)
     parser.add_argument('-s', '--stop-arm', action='store_true')
     parser.add_argument('-na', '--no-arm', action='store_true')
+    parser.add_argument('-c', '--crop-dim', type=int, default=0)
+    parser.add_argument('-clo', '--crop-left-offset', type=int, default=0)
+    parser.add_argument('-v', '--show-video', action='store_true')
+    parser.add_argument('-ti', '--top-index', type=str, default='4')
+    parser.add_argument('-bi', '--bottom-index', type=str, default='0')
     args = parser.parse_args()
+
+    # print args
+    print(f"{args=}")
+
+    rospy.set_param('crop_dim', args.crop_dim)
+    rospy.set_param('crop_left_offset', args.crop_left_offset)
+    rospy.set_param('top_index', args.top_index)
+    rospy.set_param('bottom_index', args.bottom_index)
 
     path = Path(args.root).expanduser() / args.directory
 
@@ -238,7 +274,7 @@ if __name__ == '__main__':
     import std_msgs
     bag_complete_pub = rospy.Publisher('/playback_complete', std_msgs.msg.Bool, latch=False)
     try:
-        BagVideoPublisher(path, args.stop_arm)
+        BagVideoPublisher(path, args)
     except rospy.ROSInterruptException:
         pass
     finally:
