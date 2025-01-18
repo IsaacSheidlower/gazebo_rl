@@ -12,6 +12,9 @@ from collections import deque
 from armpy import kortex_arm
 import std_msgs.msg
 import armpy
+from gazebo_rl.sensors.reward_check import find_and_draw_circles_and_detect_reward
+
+GOAL_X = 1279; GOAL_Y = 719; GOAL_MIN = 400; GOAL_MAX = 700; GOAL_Y_BOUNDARY = 200
 
 def get_memory_usage():
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -49,7 +52,9 @@ class VideoLoader:
 
         self.threshold_ns = rospy.Time(secs=0, nsecs=threshold_ns)
 
+
     def _load_videos(self):
+        raise NotImplementedError("This method is too memory intensive to use with large videos")
         """
         Load the videos into memory and store their frames and timestamps. Too big to use with big videos :(
         """
@@ -88,7 +93,6 @@ class VideoLoader:
                     raise ValueError(f"Cannot read from capture {self.video_paths[i]}")
                 self.frames[i].append(frame)
 
-
     # NOTE: Better to drop frames than spend too much time getting them (frames will be dropped in the real world)
     def get_frame_if_available(self, target_timestamp):
         """
@@ -117,20 +121,37 @@ class VideoLoader:
 
             ts = self.timestamp_lists[cam_idx][idx]
             if (ts - self.threshold_ns).to_nsec() <= target_timestamp.to_nsec(): # We're late, on time, or ahead <= threshold_ns
-                # ret_frames[cam_idx] = cam_frames[idx][1]
                 ret_frames[cam_idx] = self.frames[cam_idx].pop()
                 self.frame_idx[cam_idx] = self.frame_idx[cam_idx] + 1
 
         endT = time.perf_counter()
         if (endT - t0) > 0.01:
             rospy.logwarn(f"Video read took longer than 0.01 seconds: {(endT - t0)=}")
-        return ret_frames
+        return ret_frames, ts
     
-
+import csv
 class BagVideoPublisher():
     def __init__(self, path, args):
         stop_arm = args.stop_arm
         SHOW_FIRST_FRAME = True
+
+        # award annotations file (for reward signal)
+        award_annotations = Path('~/annotations.csv').expanduser()
+        assert award_annotations.exists(), f"Annotations file not found: {award_annotations}"
+
+        UID = str(path).split('user_')[1]
+        print(f"UID: {UID}")
+        
+        self.no_annotation = False
+        award_annotations = csv.DictReader(open(award_annotations, 'r'))
+        success_time = None
+        for row in award_annotations:
+            if row['User ID'] == UID:
+                print(f"Found user {UID} {row['Success Time ']}")
+                success_time = float(row['Success Time '])
+        if not success_time:
+            self.no_annotation = True
+            # raise ValueError(f"User {UID} not found in annotations file")
 
         # dirname is also the name of the camera topic live
         rospy.init_node('bagvideopublisher', anonymous=True)
@@ -159,6 +180,9 @@ class BagVideoPublisher():
             print(f"Video topic: {topic}")
         for k,v in ros_publisher.items():
             print(k, log_msg_types[k])
+
+        # Reward publisher
+        reward_pub = rospy.Publisher('/reward', std_msgs.msg.Float32, queue_size=1)
         rospy.sleep(0.1)
         ##
 
@@ -168,7 +192,7 @@ class BagVideoPublisher():
         
         t0 = None; walltime = rospy.Time.now(); pnum = 0
 
-        if args.no_arm:
+        if args.no_arm or args.dont_publish:
             AT_FIRST_POSE = True # don't need to move the arm
         else:
             for topic, msg, t in bag.read_messages('/my_gen3_lite/base_feedback/joint_states'):
@@ -180,7 +204,8 @@ class BagVideoPublisher():
         crop_dim = rospy.get_param('crop_dim', 0); crop_left_offset = rospy.get_param('crop_left_offset', 0)
         top_index = rospy.get_param('top_index', '4'); bottom_index = rospy.get_param('bottom_index', '0')
         # image_w = None; image_h = None
-
+        
+        frame_t0 = -1; last_joy_time = None
         for topic, msg, t in bag.read_messages():
             tsec = t.to_sec()
             if t0 is None: # first message 
@@ -199,37 +224,68 @@ class BagVideoPublisher():
             if 'cartesian' in topic:
                 if stop_arm: continue
             elif 'joy' in topic:
+                # if last_joy_time is not None:
+                #     print(f"Joy time: {t.to_sec() - last_joy_time.to_sec()}")
+                #     last_joy_time = t
+                # else: 
+                #     last_joy_time = t
+
                 if args.no_arm:
                     pass
                 else:
-                    if msg.buttons[4] == 1 or msg.buttons[6] == 1:
-                        arm.send_gripper_command(0.1, mode = 'speed', duration = 200, relative=True, block=False)
-                    elif msg.buttons[5] == 1 or msg.buttons[7] == 1:
-                        arm.send_gripper_command(-10* 0.1, mode = 'speed', duration = 200, relative=True, block=False)
+                    if args.dont_publish:
+                        pass
+                    else:
+                        if msg.buttons[4] == 1 or msg.buttons[6] == 1:
+                            arm.send_gripper_command(0.1, mode = 'speed', duration = 200, relative=True, block=False)
+                        elif msg.buttons[5] == 1 or msg.buttons[7] == 1:
+                            arm.send_gripper_command(-10* 0.1, mode = 'speed', duration = 200, relative=True, block=False)
             
-            ros_publisher[topic].publish(msg)
+            if args.dont_publish:
+                pass
+            else:
+                ros_publisher[topic].publish(msg)
             
-            camera_frames = video_loader.get_frame_if_available(t)
+            reward = 0.
+            camera_frames, ts = video_loader.get_frame_if_available(t)
+            if frame_t0 == -1: frame_t0 = ts.to_sec()
+
             for cidx, ctopic in enumerate(video_loader.dirs):
                 frame = camera_frames[cidx]
                 if frame is not None:
                     if crop_dim > 0:
+
                         # crop from the right edge for TOP image
                         if top_index in ctopic:
                             frame = frame[:crop_dim, crop_left_offset:crop_dim+crop_left_offset]
                         else:
+                            # show circles
+                            # reward = find_and_draw_circles_and_detect_reward(frame)
+
+                            if not (self.no_annotation) and (ts.to_sec() - frame_t0 > success_time):
+                                reward = 1.0
+                            else:
+                                reward = 0.0
+
                             # crop from the left, no offset for BOTTOM image
                             frame = frame[:crop_dim, -crop_dim:]
+
+                            # write reward on the image
+                            # cv2.putText(frame, f"Reward: {reward}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+                            
+                            if not args.dont_publish: reward_pub.publish(std_msgs.msg.Float32(reward))
+                            # TODO: Publish reward signal at same framerate as image (does this constrain learning at all?)
+
                             # h, w = frame.shape[:2]
                             # x0 = (w - crop_dim) // 2
                             # y0 = (h - crop_dim) // 2
                             # frame = frame[y0:y0+crop_dim, x0:x0+crop_dim]
                     
                     if args.show_video or SHOW_FIRST_FRAME:
-                        cv2.imshow(f'{cidx=} {ctopic=} {frame.shape=}', frame)
+                        cv2.imshow(f'{cidx=} {ctopic=} {frame.shape=} {crop_dim} {crop_left_offset}', frame)
                         cv2.waitKey(1)
 
-                    ros_publisher[ctopic].publish(bridge.cv2_to_imgmsg(frame))
+                    if not args.dont_publish: ros_publisher[ctopic].publish(bridge.cv2_to_imgmsg(frame))
                     # cv2.waitKey(1)
                     pnum += 1
 
@@ -254,6 +310,7 @@ if __name__ == '__main__':
     parser.add_argument('-v', '--show-video', action='store_true')
     parser.add_argument('-ti', '--top-index', type=str, default='4')
     parser.add_argument('-bi', '--bottom-index', type=str, default='0')
+    parser.add_argument('-b', '--dont-publish', action='store_true')
     args = parser.parse_args()
 
     # print args

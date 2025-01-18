@@ -14,7 +14,7 @@ import rospy
 # from kortex_driver.msg import *
 # from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32
 # # from mbrl.camera import Camera, CAMERA_CFG, SIDE_CAMERA_CFG, detect_circles
 from cv_bridge import CvBridge
 import image_transport
@@ -34,6 +34,7 @@ from videorecorder import VideoRecorder
 from lerobot.common.robot_devices.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
 # from lerobot.common.datasets.image_writer import AsyncImageWriter
 
+from reward_check import find_and_draw_circles_and_detect_reward
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
 CAMERA_FPS = 30
@@ -47,13 +48,13 @@ class Camera():
         self.timestamp_fp = None
         self.frame_times = [] # for debugging
 
-        self.crop_dim = rospy.get_param('crop_dim', 0); 
-        self.crop_left_offset = rospy.get_param('crop_left_offset', 0)
+        self.crop_dim = rospy.get_param('crop_dim', 700); 
+        self.crop_left_offset = rospy.get_param('crop_left_offset', 200)
         
         self.top_index = rospy.get_param('top_index', '4');
         self.bottom_index = rospy.get_param('bottom_index', '0')
 
-        print(f"{self.top_index=}, {self.bottom_index=} {self.camera.port=}")
+        print(f"{self.top_index=}, {self.bottom_index=} {self.camera.port=} {self.crop_dim=}, {self.crop_left_offset=}")
         if self.top_index in str(self.camera.port):
             print(f"TOP camera: {self.camera.port}")
             self.TOP = True
@@ -96,11 +97,18 @@ class Camera():
         except Exception as e:
             print(e)
 
+        # reward publisher for RSS paper
+        reward_pub = rospy.Publisher('/reward', Float32, queue_size=1)
+
         RATE_HZ = rospy.get_param("/observation_rate", 30)
         hearbeat_period = RATE_HZ * 10; heartbeat = 0
+
+        num_published = 0; start_time = time.time()
         while not rospy.is_shutdown():
             heartbeat += 1
-            if heartbeat % hearbeat_period == 0: print(f"heartbeat {time.time():1.2f}")
+            if heartbeat % hearbeat_period == 0:
+                print(f"heartbeat {time.time():1.2f}. Publish rate {num_published/(time.time() - start_time):1.2f}Hz")
+                start_time = time.time(); num_published = 0
             # print("Observation publisher heartbeat.")
 
             try:
@@ -113,19 +121,29 @@ class Camera():
                     if self.TOP:
                         img = img[:self.crop_dim, self.crop_left_offset:self.crop_dim+self.crop_left_offset]
                     else:
+                        # reward = find_and_draw_circles_and_detect_reward(img)
+
+                        reward = 0.0
+                        reward_pub.publish(reward)
+
                         # crop from the left, no offset for BOTTOM image
                         img = img[:self.crop_dim, -self.crop_dim:]
+                        # cv2.putText(img, f"Reward: 0.0", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA) # legacy from dataset. TODO: remove and reaggregate dataset
 
                 resized_image = cv2.resize(img, (96, 96), interpolation=cv2.INTER_LINEAR)
+                # resized_image = img
                 
-                # ret, img = self.cap.read()
-                # if not ret:
-                #     print("Failed to read frame from the camera.")
-                #     break
+                # conver to grayscale
+                if GRAYSCALE:=True:
+                    gray_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+                    # puclish the image
+                    img_msg = bridge.cv2_to_imgmsg(gray_image, encoding='mono8')
+                else:
+                    # cv2.imshow(f'{str(self.camera.port)} {img.shape}', img); cv2.waitKey(10)
+                    img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='bgr8')
 
-                # cv2.imshow(f'{str(self.camera.port)} {img.shape}', img); cv2.waitKey(10)
-                img_msg = bridge.cv2_to_imgmsg(resized_image, encoding='bgr8')
                 img_pub.publish(img_msg)
+                num_published += 1
 
                 # write out the images if we have an output_directory
                 if self.output_directory:
